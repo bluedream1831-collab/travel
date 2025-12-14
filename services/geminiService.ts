@@ -151,7 +151,20 @@ export const generateSocialContent = async (
       } else if (jsonStr.startsWith("```")) {
          jsonStr = jsonStr.replace(/^```\s*/, "").replace(/\s*```$/, "");
       }
-      return JSON.parse(jsonStr) as GenerationResult;
+      
+      const parsedResult = JSON.parse(jsonStr) as GenerationResult;
+
+      // Clean up content: 
+      // 1. Replace literal "\n" strings (often double escaped by LLMs) with actual newlines.
+      // 2. Remove any accidentally included markdown bold markers (**).
+      parsedResult.posts = parsedResult.posts.map(post => ({
+        ...post,
+        content: post.content
+          .replace(/\\n/g, '\n') // Fix literal \n
+          .replace(/\*\*/g, '')  // Remove bold markdown artifacts if any
+      }));
+
+      return parsedResult;
     }
     
     throw new Error("API 回傳內容為空");

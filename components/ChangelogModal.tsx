@@ -7,9 +7,16 @@ interface ChangelogEntry {
 }
 
 // Define the changelog data here
-export const APP_VERSION = 'v1.4.0';
+export const APP_VERSION = 'v1.4.1';
 
 const CHANGELOG_DATA: ChangelogEntry[] = [
+  {
+    version: 'v1.4.1',
+    date: '2024-05-24',
+    changes: [
+      '🐛 修正格式問題：強制修復部分文案中出現「\\n」符號而未正確換行的問題。',
+    ]
+  },
   {
     version: 'v1.4.0',
     date: '2024-05-24',
