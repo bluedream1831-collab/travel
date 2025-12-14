@@ -188,19 +188,38 @@ const App: React.FC = () => {
       );
       setResults(generatedContent);
     } catch (err: any) {
-      console.error("Generation Error:", err);
-      // Improve error display
-      const msg = err.message || JSON.stringify(err);
+      console.error("Generation Error in App:", err);
+      
+      let msg = "發生未預期的錯誤";
+      
+      if (err instanceof Error) {
+        msg = err.message;
+      } else if (typeof err === 'object' && err !== null) {
+        // Try to stringify, but if it's an Event it might become {} or {"isTrusted":true}
+        try {
+           const json = JSON.stringify(err);
+           if (json === '{}' || json.includes('isTrusted')) {
+             msg = "網絡或圖片讀取錯誤，請檢查您的網路連線或照片格式。";
+           } else {
+             msg = json;
+           }
+        } catch {
+           msg = "未知錯誤物件";
+        }
+      } else if (typeof err === 'string') {
+        msg = err;
+      }
+
       if (msg.includes("400")) {
          setError("請求無效 (400) - 可能是圖片格式不支援或檔案過大。");
       } else if (msg.includes("401") || msg.includes("API key")) {
-         setError("API Key 設定有誤，無法存取服務。");
+         setError("API Key 設定有誤，請檢查 Vercel 環境變數。");
       } else if (msg.includes("429")) {
          setError("目前使用人數過多 (Quota Exceeded)，請稍後再試。");
       } else if (msg.includes("SAFETY")) {
          setError("生成的內容被安全過濾器攔截，請嘗試調整圖片或文字。");
       } else {
-         setError(`生成失敗：${msg.substring(0, 100)}...`);
+         setError(`生成失敗：${msg.substring(0, 150)}`);
       }
     } finally {
       setIsLoading(false);

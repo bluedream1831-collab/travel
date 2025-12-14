@@ -1,23 +1,48 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { Platform, Tone, GeneratedPost } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Ensure API Key exists before initializing
+const apiKey = process.env.API_KEY;
+if (!apiKey) {
+  console.error("API Key is missing!");
+}
+
+const ai = new GoogleGenAI({ apiKey: apiKey || "dummy_key_for_build" });
 
 // Helper to convert File to base64 for Gemini
 const fileToPart = async (file: File): Promise<{ inlineData: { data: string; mimeType: string } }> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
+    
     reader.onloadend = () => {
-      const base64String = (reader.result as string).split(',')[1];
-      resolve({
-        inlineData: {
-          data: base64String,
-          mimeType: file.type,
-        },
-      });
+      if (reader.result && typeof reader.result === 'string') {
+        const base64String = reader.result.split(',')[1];
+        resolve({
+          inlineData: {
+            data: base64String,
+            mimeType: file.type || 'image/jpeg', // Fallback MIME type
+          },
+        });
+      } else {
+        reject(new Error(`Failed to read file: ${file.name} (Result is empty)`));
+      }
     };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
+    
+    // CRITICAL FIX: Reject with a proper Error object, not the Event object
+    reader.onerror = () => {
+      const errorMsg = reader.error ? reader.error.message : "Unknown FileReader error";
+      reject(new Error(`Error reading file ${file.name}: ${errorMsg}`));
+    };
+    
+    reader.onabort = () => {
+      reject(new Error(`File reading aborted: ${file.name}`));
+    };
+
+    try {
+      reader.readAsDataURL(file);
+    } catch (e: any) {
+      reject(new Error(`Exception starting file read: ${e.message}`));
+    }
   });
 };
 
@@ -32,6 +57,11 @@ export const generateSocialContent = async (
     feelings: string;
   }
 ): Promise<GeneratedPost[]> => {
+  // Runtime check for API Key
+  if (!process.env.API_KEY) {
+    throw new Error("API Key 未設定。請確認 Vercel 的 Environment Variables 是否已設定 API_KEY。");
+  }
+
   try {
     const imageParts = await Promise.all(images.map((img) => fileToPart(img)));
 
@@ -172,10 +202,15 @@ export const generateSocialContent = async (
       return JSON.parse(jsonStr) as GeneratedPost[];
     }
     
-    throw new Error("No content generated");
+    throw new Error("API 回傳內容為空");
 
-  } catch (error) {
-    console.error("Error generating content:", error);
-    throw error;
+  } catch (error: any) {
+    console.error("Gemini Service Error:", error);
+    // Ensure we re-throw a proper Error object
+    if (error instanceof Error) {
+        throw error;
+    } else {
+        throw new Error(JSON.stringify(error));
+    }
   }
 };
