@@ -1,0 +1,700 @@
+import React, { useState, useRef, useEffect } from 'react';
+import { Platform, Tone, UploadedImage, GeneratedPost } from './types';
+import { generateSocialContent } from './services/geminiService';
+import PlatformCard from './components/PlatformCard';
+import HistoryView from './components/HistoryView';
+import EmojiEditorModal from './components/EmojiEditorModal';
+
+type ActiveView = 'generator' | 'history';
+
+// Expanded default emoji list
+const DEFAULT_EMOJIS = [
+  '✨', '❤️', '✈️', '📸', '🌊', '🌸', '🍜', '🥺', '🔥', '😂', '🥰', '🙏',
+  '🍱', '🥂', '🏞️', '🏰', '🚆', '🚲', '💡', '⭐', '🎒', '🕶️', '🌞', '🌧️',
+  '☕', '🍰', '🍻', '🛍️', '💃', '🕺', '🤳', '🤩', '😭', '🙌', '🎉', '🌟'
+];
+
+const MAX_IMAGES = 6;
+const MAX_FILE_SIZE_MB = 10; // Prevent API 400 errors
+
+const App: React.FC = () => {
+  const [activeView, setActiveView] = useState<ActiveView>('generator');
+
+  const [images, setImages] = useState<UploadedImage[]>([]);
+  const [selectedPlatforms, setSelectedPlatforms] = useState<Platform[]>([Platform.INSTAGRAM]);
+  const [selectedTone, setSelectedTone] = useState<Tone>(Tone.EMOTIONAL);
+  
+  // Custom style for more personal touch
+  const [customStyle, setCustomStyle] = useState<string>('');
+  
+  // Style Presets State
+  const [stylePresets, setStylePresets] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('style_presets');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  // Emoji State
+  const [commonEmojis, setCommonEmojis] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('user_emojis');
+      return saved ? JSON.parse(saved) : DEFAULT_EMOJIS;
+    } catch {
+      return DEFAULT_EMOJIS;
+    }
+  });
+  const [isEmojiModalOpen, setIsEmojiModalOpen] = useState(false);
+  
+  // Detailed state variables
+  const [locationName, setLocationName] = useState<string>('');
+  const [highlights, setHighlights] = useState<string>('');
+  const [feelings, setFeelings] = useState<string>('');
+
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [results, setResults] = useState<GeneratedPost[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  
+  // Save state
+  const [isSaved, setIsSaved] = useState<boolean>(false);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Save presets whenever they change
+  useEffect(() => {
+    localStorage.setItem('style_presets', JSON.stringify(stylePresets));
+  }, [stylePresets]);
+
+  const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files && event.target.files.length > 0) {
+      const newFiles = Array.from(event.target.files) as File[];
+      
+      // 1. Validate File Size
+      const validFiles = newFiles.filter(file => {
+        const sizeMB = file.size / (1024 * 1024);
+        if (sizeMB > MAX_FILE_SIZE_MB) {
+          alert(`檔案 ${file.name} 太大了 (${sizeMB.toFixed(1)}MB)！請上傳小於 ${MAX_FILE_SIZE_MB}MB 的照片。`);
+          return false;
+        }
+        return true;
+      });
+
+      if (validFiles.length === 0) {
+         if (fileInputRef.current) fileInputRef.current.value = '';
+         return;
+      }
+
+      const remainingSlots = MAX_IMAGES - images.length;
+
+      if (remainingSlots <= 0) {
+        alert(`最多只能上傳 ${MAX_IMAGES} 張照片喔！`);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+        return;
+      }
+
+      let filesToProcess = validFiles;
+      if (validFiles.length > remainingSlots) {
+        alert(`提醒：您選了 ${validFiles.length} 張，但只能再放 ${remainingSlots} 張，已自動保留前 ${remainingSlots} 張。`);
+        filesToProcess = validFiles.slice(0, remainingSlots);
+      }
+
+      const newImages = filesToProcess.map(file => ({
+        file,
+        previewUrl: URL.createObjectURL(file)
+      }));
+      setImages(prev => [...prev, ...newImages]);
+      
+      // Reset input value to allow selecting the same file again if needed after deletion
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const removeImage = (index: number) => {
+    setImages(prev => {
+      const newImages = [...prev];
+      URL.revokeObjectURL(newImages[index].previewUrl);
+      newImages.splice(index, 1);
+      return newImages;
+    });
+  };
+
+  const togglePlatform = (platform: Platform) => {
+    setSelectedPlatforms(prev => 
+      prev.includes(platform) 
+        ? prev.filter(p => p !== platform)
+        : [...prev, platform]
+    );
+  };
+
+  const addEmojiToStyle = (emoji: string) => {
+    setCustomStyle(prev => prev + emoji);
+  };
+
+  const handleSaveEmojis = (newEmojis: string[]) => {
+    setCommonEmojis(newEmojis);
+    localStorage.setItem('user_emojis', JSON.stringify(newEmojis));
+  };
+
+  // --- Preset Handlers ---
+  const saveStylePreset = () => {
+    if (!customStyle.trim()) return;
+    if (stylePresets.includes(customStyle.trim())) {
+      alert("這個風格已經儲存過了！");
+      return;
+    }
+    setStylePresets(prev => [customStyle.trim(), ...prev]);
+  };
+
+  const applyStylePreset = (preset: string) => {
+    setCustomStyle(preset);
+  };
+
+  const deleteStylePreset = (presetToDelete: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (window.confirm("確定要刪除這個常用風格嗎？")) {
+      setStylePresets(prev => prev.filter(p => p !== presetToDelete));
+    }
+  };
+
+  const handleGenerate = async () => {
+    if (images.length === 0) {
+      setError("請至少上傳一張照片");
+      return;
+    }
+    if (selectedPlatforms.length === 0) {
+      setError("請至少選擇一個發布平台");
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+    setResults([]);
+    setIsSaved(false); // Reset saved state on new generation
+
+    try {
+      const imageFiles = images.map(img => img.file);
+      const generatedContent = await generateSocialContent(
+        imageFiles,
+        selectedPlatforms,
+        selectedTone,
+        customStyle,
+        {
+          locationName,
+          highlights,
+          feelings
+        }
+      );
+      setResults(generatedContent);
+    } catch (err: any) {
+      console.error("Generation Error:", err);
+      // Improve error display
+      const msg = err.message || JSON.stringify(err);
+      if (msg.includes("400")) {
+         setError("請求無效 (400) - 可能是圖片格式不支援或檔案過大。");
+      } else if (msg.includes("401") || msg.includes("API key")) {
+         setError("API Key 設定有誤，無法存取服務。");
+      } else if (msg.includes("429")) {
+         setError("目前使用人數過多 (Quota Exceeded)，請稍後再試。");
+      } else if (msg.includes("SAFETY")) {
+         setError("生成的內容被安全過濾器攔截，請嘗試調整圖片或文字。");
+      } else {
+         setError(`生成失敗：${msg.substring(0, 100)}...`);
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const downloadRecord = (record: any) => {
+    const dataStr = JSON.stringify([record], null, 2); // Wrap in array to match import format
+    const blob = new Blob([dataStr], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `TravelFlow_Post_${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleSaveResult = () => {
+    const record = {
+      id: Date.now(),
+      date: new Date().toISOString(),
+      config: {
+        tone: selectedTone,
+        customStyle,
+        locationName,
+        highlights,
+        feelings,
+        platforms: selectedPlatforms
+      },
+      results
+    };
+
+    try {
+      const savedData = localStorage.getItem('travel_history');
+      let existingHistory = [];
+      try {
+        existingHistory = savedData ? JSON.parse(savedData) : [];
+      } catch (e) {
+        console.error("Error parsing history", e);
+        existingHistory = [];
+      }
+      
+      const newHistory = [record, ...existingHistory];
+      
+      // Attempt to save
+      localStorage.setItem('travel_history', JSON.stringify(newHistory));
+      setIsSaved(true);
+      
+    } catch (e: any) {
+      console.error("Save failed", e);
+      // Check for QuotaExceededError
+      if (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
+        const shouldDownload = window.confirm(
+          "⚠️ 瀏覽器儲存空間已滿 (Quota Exceeded)！\n\n無法將此紀錄存入「我的紀錄」。\n是否改為直接「下載備份檔」？\n\n(若不下載，您仍可在頁面上瀏覽與複製，但重新整理後會消失)"
+        );
+        
+        if (shouldDownload) {
+          downloadRecord(record);
+          setIsSaved(true); // Treat as saved since user downloaded it
+        }
+      } else {
+        alert("儲存發生未預期的錯誤");
+      }
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900 pb-20 font-sans">
+      {/* Header */}
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+          <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setActiveView('generator')}>
+            <span className="text-2xl">✈️</span>
+            {/* Show title on mobile but smaller */}
+            <h1 className="text-lg sm:text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600">
+              TravelFlow AI
+            </h1>
+          </div>
+          
+          {/* Navigation Tabs */}
+          <nav className="flex space-x-1 bg-slate-100 p-1 rounded-lg">
+            <button
+              onClick={() => setActiveView('generator')}
+              className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium rounded-md transition-all ${
+                activeView === 'generator'
+                  ? 'bg-white text-indigo-600 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              建立新貼文
+            </button>
+            <button
+              onClick={() => setActiveView('history')}
+              className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium rounded-md transition-all flex items-center space-x-1 ${
+                activeView === 'history'
+                  ? 'bg-white text-indigo-600 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              <span>我的紀錄</span>
+            </button>
+          </nav>
+        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        
+        {activeView === 'history' ? (
+          <HistoryView />
+        ) : (
+          /* Generator View */
+          <>
+            {/* Intro Section */}
+            <div className="text-center mb-10 animate-fade-in-down">
+              <h2 className="text-3xl font-extrabold text-slate-900 sm:text-4xl mb-4">
+                讓 AI 為你的旅行說故事
+              </h2>
+              <p className="text-lg text-slate-600 max-w-2xl mx-auto">
+                上傳旅遊照片，填寫你的獨家記憶，一鍵生成 Instagram、Facebook、方格子專屬圖文。
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+              
+              {/* Left Column: Controls & Upload */}
+              <div className="lg:col-span-4 space-y-6">
+                
+                {/* Image Upload Area */}
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+                  <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-lg font-semibold flex items-center">
+                      <span className="bg-indigo-100 text-indigo-700 w-6 h-6 rounded-full flex items-center justify-center text-xs mr-2">1</span>
+                      上傳照片
+                    </h3>
+                    <span className={`text-xs font-medium px-2 py-1 rounded-full ${
+                      images.length >= MAX_IMAGES 
+                        ? 'bg-red-100 text-red-600' 
+                        : 'bg-slate-100 text-slate-500'
+                    }`}>
+                      {images.length}/{MAX_IMAGES}
+                    </span>
+                  </div>
+                  
+                  <div 
+                    onClick={() => {
+                      if (images.length < MAX_IMAGES) {
+                        fileInputRef.current?.click();
+                      } else {
+                        alert(`已達到 ${MAX_IMAGES} 張照片上限，請先刪除部分照片再上傳。`);
+                      }
+                    }}
+                    className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors group ${
+                      images.length >= MAX_IMAGES 
+                        ? 'border-slate-200 bg-slate-50 cursor-not-allowed' 
+                        : 'border-slate-300 cursor-pointer hover:border-indigo-500 hover:bg-indigo-50'
+                    }`}
+                  >
+                    <input 
+                      type="file" 
+                      ref={fileInputRef} 
+                      onChange={handleImageUpload} 
+                      multiple 
+                      accept="image/*" 
+                      className="hidden" 
+                      disabled={images.length >= MAX_IMAGES}
+                    />
+                    <div className={`text-4xl mb-3 transition-transform ${images.length < MAX_IMAGES ? 'group-hover:scale-110' : 'opacity-50'}`}>📸</div>
+                    <p className={`font-medium ${images.length >= MAX_IMAGES ? 'text-slate-400' : 'text-slate-600'}`}>
+                      {images.length >= MAX_IMAGES ? '已達上傳上限' : '點擊上傳旅遊照片'}
+                    </p>
+                    {images.length < MAX_IMAGES && (
+                      <p className="text-xs text-slate-400 mt-1">最多 {MAX_IMAGES} 張 (每張限 {MAX_FILE_SIZE_MB}MB)</p>
+                    )}
+                  </div>
+
+                  {/* Image Previews */}
+                  {images.length > 0 && (
+                    <div className="grid grid-cols-3 gap-2 mt-4">
+                      {images.map((img, idx) => (
+                        <div key={idx} className="relative aspect-square group">
+                          <img 
+                            src={img.previewUrl} 
+                            alt="preview" 
+                            className="w-full h-full object-cover rounded-lg border border-slate-200"
+                          />
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); removeImage(idx); }}
+                            className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs shadow-md opacity-0 group-hover:opacity-100 transition-opacity"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* --- CUSTOM EMOJI BUTTON --- */}
+                <button
+                  onClick={() => setIsEmojiModalOpen(true)}
+                  className="w-full py-3 px-4 bg-white border border-slate-200 border-dashed hover:border-indigo-400 hover:text-indigo-600 text-slate-500 rounded-xl transition-all flex items-center justify-center space-x-2 group hover:bg-indigo-50/50 shadow-sm"
+                >
+                  <div className="bg-slate-100 group-hover:bg-indigo-100 text-slate-500 group-hover:text-indigo-600 rounded-full w-7 h-7 flex items-center justify-center text-xs transition-colors">
+                    ⚙️
+                  </div>
+                  <span className="text-sm font-medium">編輯常用 Emoji 庫</span>
+                </button>
+
+                {/* Configuration Area */}
+                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+                  <h3 className="text-lg font-semibold mb-4 flex items-center">
+                    <span className="bg-indigo-100 text-indigo-700 w-6 h-6 rounded-full flex items-center justify-center text-xs mr-2">2</span>
+                    設定風格與平台
+                  </h3>
+
+                  {/* Tone Selector */}
+                  <div className="mb-4">
+                    <label className="block text-sm font-medium text-slate-700 mb-2">基礎風格</label>
+                    <div className="relative">
+                      <select
+                        value={selectedTone}
+                        onChange={(e) => setSelectedTone(e.target.value as Tone)}
+                        className="w-full appearance-none rounded-lg border border-slate-200 bg-slate-50 py-3 px-4 text-slate-700 focus:border-indigo-500 focus:bg-white focus:ring-indigo-500 text-sm transition-colors cursor-pointer outline-none"
+                      >
+                        {Object.values(Tone).map((tone) => (
+                          <option key={tone} value={tone}>
+                            {tone}
+                          </option>
+                        ))}
+                      </select>
+                      <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-500">
+                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Custom Style Input - Updated with Emoji Buttons & Presets */}
+                  <div className="mb-6">
+                     <div className="flex justify-between items-end mb-2">
+                       <label className="block text-xs font-medium text-slate-600">
+                         ✨ 客製化風格 (您的個人品牌)
+                       </label>
+                     </div>
+
+                     {/* Emoji Quick Select */}
+                     <div className="flex flex-wrap gap-2 mb-2">
+                       {commonEmojis.map((emoji, idx) => (
+                         <button
+                           key={idx}
+                           onClick={() => addEmojiToStyle(emoji)}
+                           className="w-8 h-8 flex items-center justify-center bg-slate-50 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 rounded-lg text-lg transition-all active:scale-95"
+                           type="button"
+                           title="加入此表情符號"
+                         >
+                           {emoji}
+                         </button>
+                       ))}
+                     </div>
+                     
+                     <div className="relative group">
+                       <textarea
+                         value={customStyle}
+                         onChange={(e) => setCustomStyle(e.target.value)}
+                         placeholder="例如：我是小資女，喜歡強調CP值；或是：我的語氣要像跟閨蜜聊天，多用Emoji..."
+                         rows={2}
+                         className="w-full rounded-lg border-slate-200 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm p-2.5 border bg-slate-50 focus:bg-white transition-colors placeholder:text-slate-300 pr-10"
+                       />
+                       <button
+                         onClick={saveStylePreset}
+                         disabled={!customStyle.trim()}
+                         className="absolute right-2 bottom-2 text-slate-400 hover:text-indigo-600 bg-white hover:bg-indigo-50 p-1.5 rounded-lg border border-transparent hover:border-indigo-100 transition-colors"
+                         title="將目前文字存為常用風格"
+                       >
+                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+                            <path d="M11 19V13H5V11H11V5H13V11H19V13H13V19H11Z" />
+                         </svg>
+                       </button>
+                     </div>
+
+                     {/* Style Presets List */}
+                     {stylePresets.length > 0 && (
+                       <div className="mt-3">
+                         <p className="text-[10px] text-slate-400 mb-1.5 flex items-center justify-between">
+                            <span>我的常用風格 (點擊套用)</span>
+                         </p>
+                         <div className="flex flex-wrap gap-2">
+                           {stylePresets.map((preset, idx) => (
+                             <div 
+                               key={idx} 
+                               className="inline-flex items-center max-w-full bg-indigo-50 text-indigo-700 text-xs px-2 py-1 rounded-full border border-indigo-100 group cursor-pointer hover:bg-indigo-100 transition-colors"
+                               onClick={() => applyStylePreset(preset)}
+                             >
+                               <span className="truncate max-w-[150px] mr-1" title={preset}>{preset}</span>
+                               <button
+                                 onClick={(e) => deleteStylePreset(preset, e)}
+                                 className="text-indigo-400 hover:text-red-500 p-0.5 rounded-full"
+                               >
+                                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3 h-3">
+                                   <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
+                                 </svg>
+                               </button>
+                             </div>
+                           ))}
+                         </div>
+                       </div>
+                     )}
+                     
+                     <p className="text-[10px] text-slate-400 mt-1">
+                       輸入您希望的口吻後，點擊右下角的 ＋ 號可存為預設值。
+                     </p>
+                  </div>
+
+                  {/* Platform Selector */}
+                  <div className="mb-6">
+                    <label className="block text-sm font-medium text-slate-700 mb-2">發布平台 (多選)</label>
+                    <div className="space-y-2">
+                      {Object.values(Platform).map((platform) => (
+                        <label key={platform} className="flex items-center space-x-3 p-3 rounded-lg border border-slate-200 hover:bg-slate-50 cursor-pointer transition-colors">
+                          <input
+                            type="checkbox"
+                            checked={selectedPlatforms.includes(platform)}
+                            onChange={() => togglePlatform(platform)}
+                            className="h-5 w-5 text-indigo-600 rounded focus:ring-indigo-500 border-gray-300"
+                          />
+                          <span className="text-slate-700 font-medium">{platform}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Detailed Info Section */}
+                  <div className="mb-6 space-y-4">
+                    <div className="border-t border-slate-100 pt-4">
+                       <h4 className="text-sm font-semibold text-slate-900 mb-3 flex items-center">
+                          <span className="mr-2">📝</span> 旅遊細節 (讓故事更像你)
+                       </h4>
+                       
+                       <div className="space-y-4">
+                        <div>
+                          <label className="block text-xs font-medium text-slate-600 mb-1">📍 景點/地點名稱</label>
+                          <input
+                            type="text"
+                            value={locationName}
+                            onChange={(e) => setLocationName(e.target.value)}
+                            placeholder="例如：京都清水寺、東京迪士尼..."
+                            className="w-full rounded-lg border-slate-200 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm p-2.5 border bg-slate-50 focus:bg-white transition-colors"
+                          />
+                          <p className="text-[10px] text-slate-400 mt-1">
+                            提供準確地點，AI 能幫你補充該地的背景故事與冷知識。
+                          </p>
+                        </div>
+                        
+                        <div>
+                          <label className="block text-xs font-medium text-slate-600 mb-1">✨ 有趣亮點 (必吃美食、設施、記憶點)</label>
+                          <textarea
+                            value={highlights}
+                            onChange={(e) => setHighlights(e.target.value)}
+                            placeholder="例如：抹茶冰淇淋超好吃、雲霄飛車排隊很久但很值得..."
+                            rows={2}
+                            className="w-full rounded-lg border-slate-200 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm p-2.5 border bg-slate-50 focus:bg-white transition-colors"
+                          />
+                          <p className="text-[10px] text-slate-400 mt-1">
+                            列出具體的細節，例如：特殊的食物口感、遇到的有趣路人、意外的小插曲。
+                          </p>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-medium text-slate-600 mb-1">❤️ 個人感受 (氛圍、心情、感想)</label>
+                          <textarea
+                            value={feelings}
+                            onChange={(e) => setFeelings(e.target.value)}
+                            placeholder="例如：夕陽很美讓人想哭、雖然腳很酸但很開心..."
+                            rows={2}
+                            className="w-full rounded-lg border-slate-200 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm p-2.5 border bg-slate-50 focus:bg-white transition-colors"
+                          />
+                          <p className="text-[10px] text-slate-400 mt-1">
+                            描寫內心的觸動，例如：放鬆、震撼、感動，或是對生活的重新思考。
+                          </p>
+                        </div>
+                       </div>
+                    </div>
+                  </div>
+
+                  {/* Action Button */}
+                  <button
+                    onClick={handleGenerate}
+                    disabled={isLoading || images.length === 0}
+                    className={`w-full py-3.5 px-4 rounded-xl shadow-lg text-white font-bold text-lg flex items-center justify-center space-x-2 transition-all transform active:scale-95 ${
+                      isLoading || images.length === 0
+                        ? 'bg-slate-300 cursor-not-allowed shadow-none'
+                        : 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 shadow-indigo-200'
+                    }`}
+                  >
+                    {isLoading ? (
+                      <>
+                        <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        生成中...
+                      </>
+                    ) : (
+                      <>
+                        <span>✨</span>
+                        <span>立即生成</span>
+                      </>
+                    )}
+                  </button>
+                  
+                  {error && (
+                    <p className="mt-4 text-sm text-red-600 bg-red-50 p-3 rounded-lg border border-red-100 animate-pulse">
+                      {error}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Right Column: Results */}
+              <div className="lg:col-span-8">
+                <div className="h-full">
+                  {results.length > 0 ? (
+                    <div className="space-y-6 animate-fade-in-up">
+                      <div className="flex items-center justify-between mb-4">
+                         <div className="flex items-center space-x-3">
+                           <h3 className="text-xl font-bold text-slate-800">生成結果</h3>
+                           <span className="text-sm text-slate-500 bg-slate-100 px-2 py-1 rounded-full">
+                             已生成 {results.length} 個版本
+                           </span>
+                         </div>
+                         
+                         {/* Save Button */}
+                         <button
+                           onClick={handleSaveResult}
+                           disabled={isSaved}
+                           className={`flex items-center space-x-2 px-4 py-2 rounded-lg border text-sm font-medium transition-all duration-200 ${
+                             isSaved 
+                               ? 'bg-green-50 border-green-200 text-green-700' 
+                               : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300'
+                           }`}
+                         >
+                            {isSaved ? (
+                              <>
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                                </svg>
+                                <span>已儲存</span>
+                              </>
+                            ) : (
+                              <>
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                                </svg>
+                                <span>儲存這次結果</span>
+                              </>
+                            )}
+                         </button>
+                      </div>
+                      
+                      <div className="grid grid-cols-1 gap-6">
+                        {results.map((post, idx) => (
+                          <div key={idx} className="h-full">
+                            <PlatformCard post={post} />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="h-full flex flex-col items-center justify-center bg-white rounded-2xl border-2 border-dashed border-slate-200 min-h-[500px] text-slate-400">
+                      <div className="text-6xl mb-4 opacity-50">📝</div>
+                      <p className="text-lg font-medium">生成的文案將會顯示在這裡</p>
+                      <p className="text-sm mt-2">請先上傳照片並填寫旅遊資訊，最後點擊生成</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+            </div>
+          </>
+        )}
+      </main>
+
+      {/* Emoji Editor Modal */}
+      <EmojiEditorModal 
+        isOpen={isEmojiModalOpen}
+        onClose={() => setIsEmojiModalOpen(false)}
+        currentEmojis={commonEmojis}
+        onSave={handleSaveEmojis}
+      />
+    </div>
+  );
+};
+
+export default App;
