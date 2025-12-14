@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Platform, Tone, UploadedImage, GeneratedPost } from './types';
+import { Platform, Tone, UploadedImage, GenerationResult } from './types';
 import { generateSocialContent } from './services/geminiService';
 import PlatformCard from './components/PlatformCard';
 import HistoryView from './components/HistoryView';
 import EmojiEditorModal from './components/EmojiEditorModal';
+import ChangelogModal, { APP_VERSION } from './components/ChangelogModal';
 
 type ActiveView = 'generator' | 'history';
 
@@ -14,26 +15,42 @@ const DEFAULT_EMOJIS = [
   '☕', '🍰', '🍻', '🛍️', '💃', '🕺', '🤳', '🤩', '😭', '🙌', '🎉', '🌟'
 ];
 
-const MAX_IMAGES = 6;
-// Slightly more generous size limit for initial selection, 
-// since we will compress them client-side immediately.
-const MAX_FILE_SIZE_MB = 15; 
+const MAX_IMAGES = 20; // Updated limit from 10 to 20
+const MAX_FILE_SIZE_MB = 50; // Increased limit to accommodate video files input (we compress them anyway)
 
-// Utility: Process and compress image immediately upon selection
-// This solves the "stale file reference" issue on mobile
+// Utility: Process file (Image or Video)
 const processFile = async (file: File): Promise<UploadedImage> => {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    
-    reader.onload = (e) => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        let width = img.width;
-        let height = img.height;
-        // Limit max dimension to 1536px (good balance for Gemini Vision)
-        const MAX_DIMENSION = 1536;
+    const isVideo = file.type.startsWith('video/');
 
+    if (isVideo) {
+      // --- Video Handling: Extract Frame ---
+      const video = document.createElement('video');
+      video.preload = 'metadata';
+      video.muted = true;
+      video.playsInline = true;
+      
+      const fileURL = URL.createObjectURL(file);
+      video.src = fileURL;
+
+      // When video metadata is loaded, seek to 1 second (or 0.1 if short) to avoid black frames
+      video.onloadeddata = () => {
+         video.currentTime = Math.min(1.0, video.duration / 2);
+      };
+
+      video.onerror = () => {
+        URL.revokeObjectURL(fileURL);
+        reject(new Error("無法載入影片檔案"));
+      };
+
+      video.onseeked = () => {
+        // Draw the current frame to canvas
+        const canvas = document.createElement('canvas');
+        let width = video.videoWidth;
+        let height = video.videoHeight;
+        
+        // Resize logic (Same as image)
+        const MAX_DIMENSION = 1536;
         if (width > height) {
           if (width > MAX_DIMENSION) {
             height = Math.round((height * MAX_DIMENSION) / width);
@@ -49,30 +66,77 @@ const processFile = async (file: File): Promise<UploadedImage> => {
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext('2d');
+        
         if (ctx) {
-          ctx.drawImage(img, 0, 0, width, height);
-          
-          // Compress to JPEG 0.8 quality
+          ctx.drawImage(video, 0, 0, width, height);
           const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
           const base64 = dataUrl.split(',')[1];
           
+          URL.revokeObjectURL(fileURL); // Clean up
           resolve({
             id: Math.random().toString(36).substring(7),
             base64,
             mimeType: 'image/jpeg',
-            previewUrl: dataUrl // Use the dataURL as preview source
+            previewUrl: dataUrl,
+            isVideo: true
           });
         } else {
-           reject(new Error("Canvas context failed"));
+          URL.revokeObjectURL(fileURL);
+          reject(new Error("Canvas context failed"));
         }
       };
+
+    } else {
+      // --- Image Handling ---
+      const reader = new FileReader();
       
-      img.onerror = () => reject(new Error("Failed to load image for processing"));
-      img.src = e.target?.result as string;
-    };
-    
-    reader.onerror = () => reject(new Error("Failed to read file"));
-    reader.readAsDataURL(file);
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+          const MAX_DIMENSION = 1536;
+
+          if (width > height) {
+            if (width > MAX_DIMENSION) {
+              height = Math.round((height * MAX_DIMENSION) / width);
+              width = MAX_DIMENSION;
+            }
+          } else {
+            if (height > MAX_DIMENSION) {
+              width = Math.round((width * MAX_DIMENSION) / height);
+              height = MAX_DIMENSION;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+            const base64 = dataUrl.split(',')[1];
+            
+            resolve({
+              id: Math.random().toString(36).substring(7),
+              base64,
+              mimeType: 'image/jpeg',
+              previewUrl: dataUrl,
+              isVideo: false
+            });
+          } else {
+             reject(new Error("Canvas context failed"));
+          }
+        };
+        
+        img.onerror = () => reject(new Error("Failed to load image for processing"));
+        img.src = e.target?.result as string;
+      };
+      
+      reader.onerror = () => reject(new Error("Failed to read file"));
+      reader.readAsDataURL(file);
+    }
   });
 };
 
@@ -83,10 +147,8 @@ const App: React.FC = () => {
   const [selectedPlatforms, setSelectedPlatforms] = useState<Platform[]>([Platform.INSTAGRAM]);
   const [selectedTone, setSelectedTone] = useState<Tone>(Tone.EMOTIONAL);
   
-  // Custom style for more personal touch
   const [customStyle, setCustomStyle] = useState<string>('');
   
-  // Style Presets State
   const [stylePresets, setStylePresets] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem('style_presets');
@@ -96,7 +158,6 @@ const App: React.FC = () => {
     }
   });
 
-  // Emoji State
   const [commonEmojis, setCommonEmojis] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem('user_emojis');
@@ -106,23 +167,22 @@ const App: React.FC = () => {
     }
   });
   const [isEmojiModalOpen, setIsEmojiModalOpen] = useState(false);
+  const [isChangelogOpen, setIsChangelogOpen] = useState(false);
   
-  // Detailed state variables
   const [locationName, setLocationName] = useState<string>('');
   const [highlights, setHighlights] = useState<string>('');
   const [feelings, setFeelings] = useState<string>('');
 
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isProcessingImages, setIsProcessingImages] = useState<boolean>(false);
-  const [results, setResults] = useState<GeneratedPost[]>([]);
-  const [error, setError] = useState<string | null>(null);
   
-  // Save state
+  // Updated results state to hold full GenerationResult object
+  const [generationResult, setGenerationResult] = useState<GenerationResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [isSaved, setIsSaved] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Save presets whenever they change
   useEffect(() => {
     localStorage.setItem('style_presets', JSON.stringify(stylePresets));
   }, [stylePresets]);
@@ -136,7 +196,7 @@ const App: React.FC = () => {
       const validFiles = newFiles.filter(file => {
         const sizeMB = file.size / (1024 * 1024);
         if (sizeMB > MAX_FILE_SIZE_MB) {
-          alert(`檔案 ${file.name} 太大了 (${sizeMB.toFixed(1)}MB)！請上傳小於 ${MAX_FILE_SIZE_MB}MB 的照片。`);
+          alert(`檔案 ${file.name} 太大了 (${sizeMB.toFixed(1)}MB)！為了效能，請上傳小於 ${MAX_FILE_SIZE_MB}MB 的檔案。`);
           return false;
         }
         return true;
@@ -150,18 +210,18 @@ const App: React.FC = () => {
       const remainingSlots = MAX_IMAGES - images.length;
 
       if (remainingSlots <= 0) {
-        alert(`最多只能上傳 ${MAX_IMAGES} 張照片喔！`);
+        alert(`最多只能上傳 ${MAX_IMAGES} 個檔案喔！`);
         if (fileInputRef.current) fileInputRef.current.value = '';
         return;
       }
 
       let filesToProcess = validFiles;
       if (validFiles.length > remainingSlots) {
-        alert(`提醒：您選了 ${validFiles.length} 張，但只能再放 ${remainingSlots} 張，已自動保留前 ${remainingSlots} 張。`);
+        alert(`提醒：您選了 ${validFiles.length} 個檔案，但只能再放 ${remainingSlots} 個，已自動保留前 ${remainingSlots} 個。`);
         filesToProcess = validFiles.slice(0, remainingSlots);
       }
 
-      // Process images immediately
+      // Process images/videos immediately
       setIsProcessingImages(true);
       try {
         const processedImages = await Promise.all(
@@ -170,7 +230,7 @@ const App: React.FC = () => {
         setImages(prev => [...prev, ...processedImages]);
       } catch (e) {
         console.error(e);
-        setError("圖片處理失敗，請確認檔案格式是否正確。");
+        setError("檔案處理失敗，請確認圖片或影片格式是否正確。");
       } finally {
         setIsProcessingImages(false);
         // Reset input value
@@ -181,6 +241,15 @@ const App: React.FC = () => {
 
   const removeImage = (idToRemove: string) => {
     setImages(prev => prev.filter(img => img.id !== idToRemove));
+  };
+
+  const removeAllImages = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (images.length === 0) return;
+    
+    if (window.confirm("確定要清空目前已上傳的所有照片與影片嗎？")) {
+      setImages([]);
+    }
   };
 
   const togglePlatform = (platform: Platform) => {
@@ -200,7 +269,6 @@ const App: React.FC = () => {
     localStorage.setItem('user_emojis', JSON.stringify(newEmojis));
   };
 
-  // --- Preset Handlers ---
   const saveStylePreset = () => {
     if (!customStyle.trim()) return;
     if (stylePresets.includes(customStyle.trim())) {
@@ -223,7 +291,7 @@ const App: React.FC = () => {
 
   const handleGenerate = async () => {
     if (images.length === 0) {
-      setError("請至少上傳一張照片");
+      setError("請至少上傳一張照片或影片");
       return;
     }
     if (selectedPlatforms.length === 0) {
@@ -233,11 +301,10 @@ const App: React.FC = () => {
 
     setIsLoading(true);
     setError(null);
-    setResults([]);
-    setIsSaved(false); // Reset saved state on new generation
+    setGenerationResult(null);
+    setIsSaved(false);
 
     try {
-      // We now pass the pre-processed base64 data, avoiding any FileReader usage at this stage
       const imageParts = images.map(img => ({
         inlineData: {
           data: img.base64,
@@ -245,7 +312,7 @@ const App: React.FC = () => {
         }
       }));
 
-      const generatedContent = await generateSocialContent(
+      const result = await generateSocialContent(
         imageParts,
         selectedPlatforms,
         selectedTone,
@@ -256,7 +323,7 @@ const App: React.FC = () => {
           feelings
         }
       );
-      setResults(generatedContent);
+      setGenerationResult(result);
     } catch (err: any) {
       console.error("Generation Error in App:", err);
       
@@ -296,7 +363,7 @@ const App: React.FC = () => {
   };
 
   const downloadRecord = (record: any) => {
-    const dataStr = JSON.stringify([record], null, 2); // Wrap in array to match import format
+    const dataStr = JSON.stringify([record], null, 2);
     const blob = new Blob([dataStr], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -309,6 +376,8 @@ const App: React.FC = () => {
   };
 
   const handleSaveResult = () => {
+    if (!generationResult) return;
+
     const record = {
       id: Date.now(),
       date: new Date().toISOString(),
@@ -320,7 +389,7 @@ const App: React.FC = () => {
         feelings,
         platforms: selectedPlatforms
       },
-      results
+      resultData: generationResult
     };
 
     try {
@@ -335,21 +404,19 @@ const App: React.FC = () => {
       
       const newHistory = [record, ...existingHistory];
       
-      // Attempt to save
       localStorage.setItem('travel_history', JSON.stringify(newHistory));
       setIsSaved(true);
       
     } catch (e: any) {
       console.error("Save failed", e);
-      // Check for QuotaExceededError
       if (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
         const shouldDownload = window.confirm(
-          "⚠️ 瀏覽器儲存空間已滿 (Quota Exceeded)！\n\n無法將此紀錄存入「我的紀錄」。\n是否改為直接「下載備份檔」？\n\n(若不下載，您仍可在頁面上瀏覽與複製，但重新整理後會消失)"
+          "⚠️ 瀏覽器儲存空間已滿 (Quota Exceeded)！\n\n無法將此紀錄存入「我的紀錄」。\n是否改為直接「下載備份檔」？"
         );
         
         if (shouldDownload) {
           downloadRecord(record);
-          setIsSaved(true); // Treat as saved since user downloaded it
+          setIsSaved(true);
         }
       } else {
         alert("儲存發生未預期的錯誤");
@@ -358,7 +425,7 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 pb-20 font-sans">
+    <div className="min-h-screen bg-slate-50 text-slate-900 pb-20 font-sans flex flex-col">
       {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
@@ -396,7 +463,7 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-grow w-full">
         
         {activeView === 'history' ? (
           <HistoryView />
@@ -409,7 +476,7 @@ const App: React.FC = () => {
                 讓 AI 為你的旅行說故事
               </h2>
               <p className="text-lg text-slate-600 max-w-2xl mx-auto">
-                上傳旅遊照片，填寫你的獨家記憶，一鍵生成 Instagram、Facebook、方格子專屬圖文。
+                上傳旅遊照片或簡單短片(Reels)，填寫記憶，一鍵生成社群專屬圖文。
               </p>
             </div>
 
@@ -418,20 +485,34 @@ const App: React.FC = () => {
               {/* Left Column: Controls & Upload */}
               <div className="lg:col-span-4 space-y-6">
                 
-                {/* Image Upload Area */}
+                {/* Image/Video Upload Area */}
                 <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
                   <div className="flex justify-between items-center mb-4">
                     <h3 className="text-lg font-semibold flex items-center">
                       <span className="bg-indigo-100 text-indigo-700 w-6 h-6 rounded-full flex items-center justify-center text-xs mr-2">1</span>
-                      上傳照片
+                      上傳素材
                     </h3>
-                    <span className={`text-xs font-medium px-2 py-1 rounded-full ${
-                      images.length >= MAX_IMAGES 
-                        ? 'bg-red-100 text-red-600' 
-                        : 'bg-slate-100 text-slate-500'
-                    }`}>
-                      {images.length}/{MAX_IMAGES}
-                    </span>
+                    <div className="flex items-center space-x-2">
+                      {images.length > 0 && (
+                        <button
+                          onClick={removeAllImages}
+                          className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded transition-colors flex items-center"
+                          title="全部刪除"
+                        >
+                          <svg className="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                          清空
+                        </button>
+                      )}
+                      <span className={`text-xs font-medium px-2 py-1 rounded-full ${
+                        images.length >= MAX_IMAGES 
+                          ? 'bg-red-100 text-red-600' 
+                          : 'bg-slate-100 text-slate-500'
+                      }`}>
+                        {images.length}/{MAX_IMAGES}
+                      </span>
+                    </div>
                   </div>
                   
                   <div 
@@ -440,7 +521,7 @@ const App: React.FC = () => {
                         if (images.length < MAX_IMAGES) {
                           fileInputRef.current?.click();
                         } else {
-                          alert(`已達到 ${MAX_IMAGES} 張照片上限，請先刪除部分照片再上傳。`);
+                          alert(`已達到 ${MAX_IMAGES} 個檔案上限，請先刪除部分檔案再上傳。`);
                         }
                       }
                     }}
@@ -455,7 +536,7 @@ const App: React.FC = () => {
                       ref={fileInputRef} 
                       onChange={handleImageUpload} 
                       multiple 
-                      accept="image/*" 
+                      accept="image/*,video/*" 
                       className="hidden" 
                       disabled={images.length >= MAX_IMAGES || isProcessingImages}
                     />
@@ -466,22 +547,22 @@ const App: React.FC = () => {
                           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                         </svg>
-                        <p className="text-sm text-indigo-600 font-medium">正在處理圖片...</p>
+                        <p className="text-sm text-indigo-600 font-medium">正在處理...</p>
                       </div>
                     ) : (
                       <>
                         <div className={`text-4xl mb-3 transition-transform ${images.length < MAX_IMAGES ? 'group-hover:scale-110' : 'opacity-50'}`}>📸</div>
                         <p className={`font-medium ${images.length >= MAX_IMAGES ? 'text-slate-400' : 'text-slate-600'}`}>
-                          {images.length >= MAX_IMAGES ? '已達上傳上限' : '點擊上傳旅遊照片'}
+                          {images.length >= MAX_IMAGES ? '已達上傳上限' : '點擊上傳照片或短片'}
                         </p>
                         {images.length < MAX_IMAGES && (
-                          <p className="text-xs text-slate-400 mt-1">最多 {MAX_IMAGES} 張</p>
+                          <p className="text-xs text-slate-400 mt-1">最多 {MAX_IMAGES} 個檔案 (自動擷取影片畫面)</p>
                         )}
                       </>
                     )}
                   </div>
 
-                  {/* Image Previews */}
+                  {/* Previews */}
                   {images.length > 0 && (
                     <div className="grid grid-cols-3 gap-2 mt-4">
                       {images.map((img) => (
@@ -491,6 +572,15 @@ const App: React.FC = () => {
                             alt="preview" 
                             className="w-full h-full object-cover rounded-lg border border-slate-200"
                           />
+                          {img.isVideo && (
+                            <div className="absolute inset-0 flex items-center justify-center bg-black/20 rounded-lg">
+                               <div className="bg-black/50 rounded-full p-1">
+                                 <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+                                   <path d="M8 5v14l11-7z" />
+                                 </svg>
+                               </div>
+                            </div>
+                          )}
                           <button 
                             onClick={(e) => { e.stopPropagation(); removeImage(img.id); }}
                             className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs shadow-md opacity-0 group-hover:opacity-100 transition-opacity"
@@ -544,7 +634,7 @@ const App: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Custom Style Input - Updated with Emoji Buttons & Presets */}
+                  {/* Custom Style */}
                   <div className="mb-6">
                      <div className="flex justify-between items-end mb-2">
                        <label className="block text-xs font-medium text-slate-600">
@@ -552,7 +642,6 @@ const App: React.FC = () => {
                        </label>
                      </div>
 
-                     {/* Emoji Quick Select */}
                      <div className="flex flex-wrap gap-2 mb-2">
                        {commonEmojis.map((emoji, idx) => (
                          <button
@@ -587,7 +676,6 @@ const App: React.FC = () => {
                        </button>
                      </div>
 
-                     {/* Style Presets List */}
                      {stylePresets.length > 0 && (
                        <div className="mt-3">
                          <p className="text-[10px] text-slate-400 mb-1.5 flex items-center justify-between">
@@ -614,10 +702,6 @@ const App: React.FC = () => {
                          </div>
                        </div>
                      )}
-                     
-                     <p className="text-[10px] text-slate-400 mt-1">
-                       輸入您希望的口吻後，點擊右下角的 ＋ 號可存為預設值。
-                     </p>
                   </div>
 
                   {/* Platform Selector */}
@@ -652,11 +736,11 @@ const App: React.FC = () => {
                             type="text"
                             value={locationName}
                             onChange={(e) => setLocationName(e.target.value)}
-                            placeholder="例如：京都清水寺、東京迪士尼..."
+                            placeholder="若不確定，可留空 (AI 會嘗試讀取招牌/地標)"
                             className="w-full rounded-lg border-slate-200 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm p-2.5 border bg-slate-50 focus:bg-white transition-colors"
                           />
                           <p className="text-[10px] text-slate-400 mt-1">
-                            提供準確地點，AI 能幫你補充該地的背景故事與冷知識。
+                            留空可讓 AI 自動偵測。若照片/影片含招牌文字 (OCR)，準確度極高。
                           </p>
                         </div>
                         
@@ -669,9 +753,6 @@ const App: React.FC = () => {
                             rows={2}
                             className="w-full rounded-lg border-slate-200 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm p-2.5 border bg-slate-50 focus:bg-white transition-colors"
                           />
-                          <p className="text-[10px] text-slate-400 mt-1">
-                            列出具體的細節，例如：特殊的食物口感、遇到的有趣路人、意外的小插曲。
-                          </p>
                         </div>
 
                         <div>
@@ -683,15 +764,11 @@ const App: React.FC = () => {
                             rows={2}
                             className="w-full rounded-lg border-slate-200 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm p-2.5 border bg-slate-50 focus:bg-white transition-colors"
                           />
-                          <p className="text-[10px] text-slate-400 mt-1">
-                            描寫內心的觸動，例如：放鬆、震撼、感動，或是對生活的重新思考。
-                          </p>
                         </div>
                        </div>
                     </div>
                   </div>
 
-                  {/* Action Button */}
                   <button
                     onClick={handleGenerate}
                     disabled={isLoading || isProcessingImages || images.length === 0}
@@ -728,17 +805,53 @@ const App: React.FC = () => {
               {/* Right Column: Results */}
               <div className="lg:col-span-8">
                 <div className="h-full">
-                  {results.length > 0 ? (
+                  {generationResult ? (
                     <div className="space-y-6 animate-fade-in-up">
-                      <div className="flex items-center justify-between mb-4">
+                      
+                      {/* Detection Banner - NEW FEATURE */}
+                      <div className={`p-4 rounded-xl border flex items-start space-x-3 ${
+                        generationResult.analysis.confidence === 'HIGH' 
+                          ? 'bg-green-50 border-green-200 text-green-800'
+                          : generationResult.analysis.confidence === 'MEDIUM'
+                          ? 'bg-amber-50 border-amber-200 text-amber-800'
+                          : 'bg-slate-100 border-slate-200 text-slate-700'
+                      }`}>
+                        <div className="text-2xl mt-0.5">
+                           {generationResult.analysis.confidence === 'HIGH' ? '🎯' : 
+                            generationResult.analysis.confidence === 'MEDIUM' ? '🤔' : '👀'}
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-center space-x-2">
+                             <h4 className="font-bold">
+                               AI 偵測地點：{generationResult.analysis.detectedName}
+                             </h4>
+                             <span className={`text-xs px-2 py-0.5 rounded-full font-medium border ${
+                                generationResult.analysis.confidence === 'HIGH' ? 'bg-green-100 border-green-300 text-green-700' :
+                                generationResult.analysis.confidence === 'MEDIUM' ? 'bg-amber-100 border-amber-300 text-amber-700' :
+                                'bg-slate-200 border-slate-300 text-slate-600'
+                             }`}>
+                               信心: {generationResult.analysis.confidence}
+                             </span>
+                          </div>
+                          <p className="text-sm mt-1 opacity-90">
+                             {generationResult.analysis.evidence}
+                          </p>
+                          {generationResult.analysis.confidence !== 'HIGH' && (
+                             <p className="text-xs mt-2 opacity-75">
+                               💡 建議：若地點不準確，請在左側「旅遊細節」手動填入正確名稱後重新生成。
+                             </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between mb-2">
                          <div className="flex items-center space-x-3">
                            <h3 className="text-xl font-bold text-slate-800">生成結果</h3>
                            <span className="text-sm text-slate-500 bg-slate-100 px-2 py-1 rounded-full">
-                             已生成 {results.length} 個版本
+                             {generationResult.posts.length} 個版本
                            </span>
                          </div>
                          
-                         {/* Save Button */}
                          <button
                            onClick={handleSaveResult}
                            disabled={isSaved}
@@ -760,14 +873,14 @@ const App: React.FC = () => {
                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
                                 </svg>
-                                <span>儲存這次結果</span>
+                                <span>儲存</span>
                               </>
                             )}
                          </button>
                       </div>
                       
                       <div className="grid grid-cols-1 gap-6">
-                        {results.map((post, idx) => (
+                        {generationResult.posts.map((post, idx) => (
                           <div key={idx} className="h-full">
                             <PlatformCard post={post} />
                           </div>
@@ -789,12 +902,32 @@ const App: React.FC = () => {
         )}
       </main>
 
-      {/* Emoji Editor Modal */}
+      {/* Footer with Version Info */}
+      <footer className="bg-white border-t border-slate-200 mt-auto py-4">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-center text-sm text-slate-500">
+           <p className="flex items-center space-x-2">
+             <span>TravelFlow AI</span>
+             <span className="w-1 h-1 rounded-full bg-slate-300"></span>
+             <button 
+               onClick={() => setIsChangelogOpen(true)}
+               className="hover:text-indigo-600 transition-colors underline decoration-slate-300 underline-offset-2 hover:decoration-indigo-300"
+             >
+               {APP_VERSION}
+             </button>
+           </p>
+        </div>
+      </footer>
+
       <EmojiEditorModal 
         isOpen={isEmojiModalOpen}
         onClose={() => setIsEmojiModalOpen(false)}
         currentEmojis={commonEmojis}
         onSave={handleSaveEmojis}
+      />
+
+      <ChangelogModal
+        isOpen={isChangelogOpen}
+        onClose={() => setIsChangelogOpen(false)}
       />
     </div>
   );

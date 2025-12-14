@@ -8,7 +8,6 @@ const HistoryView: React.FC = () => {
   const [storageUsage, setStorageUsage] = useState<{ usedKB: number, percentage: number }>({ usedKB: 0, percentage: 0 });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Approx 5MB for local storage usually
   const MAX_STORAGE_BYTES = 5 * 1024 * 1024; 
 
   useEffect(() => {
@@ -24,11 +23,10 @@ const HistoryView: React.FC = () => {
         setHistory([]);
       }
       
-      // Calculate usage
       let totalBytes = 0;
       for (let key in localStorage) {
         if (localStorage.hasOwnProperty(key)) {
-          totalBytes += (localStorage[key].length + key.length) * 2; // char is 2 bytes
+          totalBytes += (localStorage[key].length + key.length) * 2;
         }
       }
       const usedKB = Math.round(totalBytes / 1024);
@@ -47,7 +45,7 @@ const HistoryView: React.FC = () => {
       setHistory(newHistory);
       localStorage.setItem('travel_history', JSON.stringify(newHistory));
       if (expandedId === id) setExpandedId(null);
-      loadHistoryAndUsage(); // Recalculate usage
+      loadHistoryAndUsage();
     }
   };
 
@@ -74,7 +72,6 @@ const HistoryView: React.FC = () => {
     });
   };
 
-  // Export functionality
   const handleExport = () => {
     if (history.length === 0) {
       alert("目前沒有紀錄可供匯出");
@@ -92,7 +89,6 @@ const HistoryView: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
-  // Import functionality
   const handleImportClick = () => {
     fileInputRef.current?.click();
   };
@@ -111,15 +107,33 @@ const HistoryView: React.FC = () => {
           throw new Error("格式錯誤：檔案內容必須是陣列");
         }
 
-        // Basic validation checking if it looks like a record
-        const isValidRecord = (item: any) => item && item.id && item.results;
-        if (parsedData.length > 0 && !isValidRecord(parsedData[0])) {
+        // Migration support: old records might have `results` instead of `resultData`
+        // We do a simple check. If `results` exists but `resultData` doesn't, we map it.
+        const normalizedData = parsedData.map((item: any) => {
+          if (item.results && !item.resultData) {
+             // Migrate old format on the fly
+             return {
+               ...item,
+               resultData: {
+                 analysis: {
+                   detectedName: item.config.locationName || "舊紀錄未偵測",
+                   confidence: "LOW",
+                   evidence: "此為舊版紀錄，無詳細分析資料"
+                 },
+                 posts: item.results
+               }
+             };
+          }
+          return item;
+        });
+
+        const isValidRecord = (item: any) => item && item.id && item.resultData;
+        if (normalizedData.length > 0 && !isValidRecord(normalizedData[0])) {
            throw new Error("格式錯誤：無法識別的紀錄格式");
         }
 
-        // Merge logic: Filter out duplicates based on ID
         const existingIds = new Set(history.map(h => h.id));
-        const newRecords = parsedData.filter((item: SavedRecord) => !existingIds.has(item.id));
+        const newRecords = normalizedData.filter((item: SavedRecord) => !existingIds.has(item.id));
 
         if (newRecords.length === 0) {
           alert("匯入的資料已存在，無需更新。");
@@ -137,7 +151,6 @@ const HistoryView: React.FC = () => {
         console.error(err);
         alert("匯入失敗：檔案格式不正確");
       } finally {
-        // Reset input
         if (fileInputRef.current) {
           fileInputRef.current.value = '';
         }
@@ -153,7 +166,6 @@ const HistoryView: React.FC = () => {
         <h3 className="text-xl font-bold text-slate-600">目前沒有儲存的紀錄</h3>
         <p className="mt-2 mb-6">去生成一些精彩的旅遊文案並儲存下來吧！</p>
         
-        {/* Allow import even when empty */}
         <button 
            onClick={handleImportClick}
            className="text-indigo-600 hover:text-indigo-700 underline text-sm"
@@ -182,7 +194,6 @@ const HistoryView: React.FC = () => {
             </span>
           </div>
 
-          {/* Action Buttons */}
           <div className="flex flex-wrap space-x-2 gap-y-2">
             <input 
               type="file" 
@@ -221,7 +232,6 @@ const HistoryView: React.FC = () => {
           </div>
         </div>
         
-        {/* Storage Usage Bar */}
         <div className="bg-slate-100 rounded-full h-2.5 w-full overflow-hidden mt-2 relative group cursor-help">
           <div 
             className={`h-full rounded-full transition-all duration-500 ${
@@ -230,7 +240,6 @@ const HistoryView: React.FC = () => {
             }`}
             style={{ width: `${storageUsage.percentage}%` }}
           />
-          {/* Tooltip */}
           <div className="absolute top-4 left-0 text-xs text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity bg-white p-1 rounded shadow border border-slate-200 z-10 whitespace-nowrap">
              已使用: {storageUsage.usedKB} KB / 5120 KB (約 {storageUsage.percentage.toFixed(1)}%)
           </div>
@@ -250,7 +259,6 @@ const HistoryView: React.FC = () => {
                 : 'border-slate-200 shadow-sm hover:border-indigo-300 hover:shadow-md'
             }`}
           >
-            {/* Header / Summary */}
             <div 
               onClick={() => toggleExpand(record.id)}
               className="p-5 cursor-pointer flex items-center justify-between bg-white"
@@ -270,7 +278,7 @@ const HistoryView: React.FC = () => {
                   </span>
                 </div>
                 <h3 className="text-lg font-bold text-slate-800 truncate pr-4">
-                  {record.config.locationName || "未命名旅程"}
+                  {record.resultData.analysis.detectedName || record.config.locationName || "未命名旅程"}
                 </h3>
                 <p className="text-sm text-slate-500 truncate mt-1">
                    {record.config.highlights || "沒有特別紀錄亮點..."}
@@ -295,30 +303,26 @@ const HistoryView: React.FC = () => {
               </div>
             </div>
 
-            {/* Expanded Content */}
             {expandedId === record.id && (
               <div className="border-t border-slate-100 bg-slate-50/50 p-6">
                 
-                {/* Original Inputs Summary */}
                 <div className="mb-6 bg-white p-4 rounded-lg border border-slate-200 text-sm">
-                  <h4 className="font-semibold text-slate-700 mb-2 border-b border-slate-100 pb-2">當時的設定</h4>
+                  <h4 className="font-semibold text-slate-700 mb-2 border-b border-slate-100 pb-2">當時的設定 & AI 偵測</h4>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-slate-600">
-                    <div><span className="text-slate-400">地點：</span> {record.config.locationName || "-"}</div>
+                    <div>
+                        <span className="text-slate-400">偵測地點：</span> {record.resultData.analysis.detectedName}
+                        <span className="text-xs ml-2 opacity-70">({record.resultData.analysis.confidence} 信心)</span>
+                    </div>
+                    <div><span className="text-slate-400">輸入地點：</span> {record.config.locationName || "(留空)"}</div>
                     <div><span className="text-slate-400">風格：</span> {record.config.tone}</div>
+                    <div className="col-span-1 md:col-span-2"><span className="text-slate-400">推論依據：</span> {record.resultData.analysis.evidence}</div>
                     <div className="col-span-1 md:col-span-2"><span className="text-slate-400">亮點：</span> {record.config.highlights || "-"}</div>
                     <div className="col-span-1 md:col-span-2"><span className="text-slate-400">感受：</span> {record.config.feelings || "-"}</div>
-                    {record.config.customStyle && (
-                       <div className="col-span-1 md:col-span-2 text-indigo-600"><span className="text-slate-400">客製：</span> {record.config.customStyle}</div>
-                    )}
-                  </div>
-                  <div className="mt-3 text-xs text-slate-400 text-right">
-                    * 僅儲存文字紀錄，圖片無法保存 (LocalStorage 限制)
                   </div>
                 </div>
 
-                {/* Results Grid */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {record.results.map((post, idx) => (
+                  {record.resultData.posts.map((post, idx) => (
                     <div key={idx} className="h-full">
                        <PlatformCard post={post} />
                     </div>

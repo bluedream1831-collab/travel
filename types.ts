@@ -1,6 +1,7 @@
 export enum Platform {
   INSTAGRAM = 'Instagram',
   FACEBOOK = 'Facebook',
+  THREADS = 'Threads',
   VOCUS = 'Fanggezi (方格子)',
   PIXNET = 'Pixnet (痞客邦)',
 }
@@ -19,11 +20,23 @@ export interface GeneratedPost {
   hashtags: string[];
 }
 
+export interface LocationAnalysis {
+  detectedName: string;
+  confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+  evidence: string; // Why did the AI guess this? (e.g., "Signboard says 'Kinkakuji'", "Eiffel Tower visible")
+}
+
+export interface GenerationResult {
+  analysis: LocationAnalysis;
+  posts: GeneratedPost[];
+}
+
 export interface UploadedImage {
   id: string;       // Unique ID for React keys
   base64: string;   // Processed image data
   mimeType: string; // e.g. 'image/jpeg'
   previewUrl: string; // For display
+  isVideo?: boolean; // New flag to indicate if this source was a video
 }
 
 export interface SavedRecord {
@@ -37,5 +50,5 @@ export interface SavedRecord {
     feelings: string;
     platforms: Platform[];
   };
-  results: GeneratedPost[];
+  resultData: GenerationResult; // Changed from results to resultData to store analysis
 }
