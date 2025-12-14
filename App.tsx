@@ -15,7 +15,66 @@ const DEFAULT_EMOJIS = [
 ];
 
 const MAX_IMAGES = 6;
-const MAX_FILE_SIZE_MB = 10; // Prevent API 400 errors
+// Slightly more generous size limit for initial selection, 
+// since we will compress them client-side immediately.
+const MAX_FILE_SIZE_MB = 15; 
+
+// Utility: Process and compress image immediately upon selection
+// This solves the "stale file reference" issue on mobile
+const processFile = async (file: File): Promise<UploadedImage> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+        // Limit max dimension to 1536px (good balance for Gemini Vision)
+        const MAX_DIMENSION = 1536;
+
+        if (width > height) {
+          if (width > MAX_DIMENSION) {
+            height = Math.round((height * MAX_DIMENSION) / width);
+            width = MAX_DIMENSION;
+          }
+        } else {
+          if (height > MAX_DIMENSION) {
+            width = Math.round((width * MAX_DIMENSION) / height);
+            height = MAX_DIMENSION;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          
+          // Compress to JPEG 0.8 quality
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+          const base64 = dataUrl.split(',')[1];
+          
+          resolve({
+            id: Math.random().toString(36).substring(7),
+            base64,
+            mimeType: 'image/jpeg',
+            previewUrl: dataUrl // Use the dataURL as preview source
+          });
+        } else {
+           reject(new Error("Canvas context failed"));
+        }
+      };
+      
+      img.onerror = () => reject(new Error("Failed to load image for processing"));
+      img.src = e.target?.result as string;
+    };
+    
+    reader.onerror = () => reject(new Error("Failed to read file"));
+    reader.readAsDataURL(file);
+  });
+};
 
 const App: React.FC = () => {
   const [activeView, setActiveView] = useState<ActiveView>('generator');
@@ -54,6 +113,7 @@ const App: React.FC = () => {
   const [feelings, setFeelings] = useState<string>('');
 
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isProcessingImages, setIsProcessingImages] = useState<boolean>(false);
   const [results, setResults] = useState<GeneratedPost[]>([]);
   const [error, setError] = useState<string | null>(null);
   
@@ -67,8 +127,9 @@ const App: React.FC = () => {
     localStorage.setItem('style_presets', JSON.stringify(stylePresets));
   }, [stylePresets]);
 
-  const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files && event.target.files.length > 0) {
+      setError(null);
       const newFiles = Array.from(event.target.files) as File[];
       
       // 1. Validate File Size
@@ -100,24 +161,26 @@ const App: React.FC = () => {
         filesToProcess = validFiles.slice(0, remainingSlots);
       }
 
-      const newImages = filesToProcess.map(file => ({
-        file,
-        previewUrl: URL.createObjectURL(file)
-      }));
-      setImages(prev => [...prev, ...newImages]);
-      
-      // Reset input value to allow selecting the same file again if needed after deletion
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      // Process images immediately
+      setIsProcessingImages(true);
+      try {
+        const processedImages = await Promise.all(
+          filesToProcess.map(file => processFile(file))
+        );
+        setImages(prev => [...prev, ...processedImages]);
+      } catch (e) {
+        console.error(e);
+        setError("圖片處理失敗，請確認檔案格式是否正確。");
+      } finally {
+        setIsProcessingImages(false);
+        // Reset input value
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      }
     }
   };
 
-  const removeImage = (index: number) => {
-    setImages(prev => {
-      const newImages = [...prev];
-      URL.revokeObjectURL(newImages[index].previewUrl);
-      newImages.splice(index, 1);
-      return newImages;
-    });
+  const removeImage = (idToRemove: string) => {
+    setImages(prev => prev.filter(img => img.id !== idToRemove));
   };
 
   const togglePlatform = (platform: Platform) => {
@@ -174,9 +237,16 @@ const App: React.FC = () => {
     setIsSaved(false); // Reset saved state on new generation
 
     try {
-      const imageFiles = images.map(img => img.file);
+      // We now pass the pre-processed base64 data, avoiding any FileReader usage at this stage
+      const imageParts = images.map(img => ({
+        inlineData: {
+          data: img.base64,
+          mimeType: img.mimeType
+        }
+      }));
+
       const generatedContent = await generateSocialContent(
-        imageFiles,
+        imageParts,
         selectedPlatforms,
         selectedTone,
         customStyle,
@@ -195,11 +265,10 @@ const App: React.FC = () => {
       if (err instanceof Error) {
         msg = err.message;
       } else if (typeof err === 'object' && err !== null) {
-        // Try to stringify, but if it's an Event it might become {} or {"isTrusted":true}
         try {
            const json = JSON.stringify(err);
            if (json === '{}' || json.includes('isTrusted')) {
-             msg = "網絡或圖片讀取錯誤，請檢查您的網路連線或照片格式。";
+             msg = "網絡或圖片資料錯誤，請嘗試重新整理頁面。";
            } else {
              msg = json;
            }
@@ -211,7 +280,7 @@ const App: React.FC = () => {
       }
 
       if (msg.includes("400")) {
-         setError("請求無效 (400) - 可能是圖片格式不支援或檔案過大。");
+         setError("請求無效 (400) - 圖片可能被防火牆阻擋或格式無法辨識。");
       } else if (msg.includes("401") || msg.includes("API key")) {
          setError("API Key 設定有誤，請檢查 Vercel 環境變數。");
       } else if (msg.includes("429")) {
@@ -367,14 +436,16 @@ const App: React.FC = () => {
                   
                   <div 
                     onClick={() => {
-                      if (images.length < MAX_IMAGES) {
-                        fileInputRef.current?.click();
-                      } else {
-                        alert(`已達到 ${MAX_IMAGES} 張照片上限，請先刪除部分照片再上傳。`);
+                      if (!isProcessingImages) {
+                        if (images.length < MAX_IMAGES) {
+                          fileInputRef.current?.click();
+                        } else {
+                          alert(`已達到 ${MAX_IMAGES} 張照片上限，請先刪除部分照片再上傳。`);
+                        }
                       }
                     }}
-                    className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors group ${
-                      images.length >= MAX_IMAGES 
+                    className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors group relative overflow-hidden ${
+                      images.length >= MAX_IMAGES || isProcessingImages
                         ? 'border-slate-200 bg-slate-50 cursor-not-allowed' 
                         : 'border-slate-300 cursor-pointer hover:border-indigo-500 hover:bg-indigo-50'
                     }`}
@@ -386,29 +457,42 @@ const App: React.FC = () => {
                       multiple 
                       accept="image/*" 
                       className="hidden" 
-                      disabled={images.length >= MAX_IMAGES}
+                      disabled={images.length >= MAX_IMAGES || isProcessingImages}
                     />
-                    <div className={`text-4xl mb-3 transition-transform ${images.length < MAX_IMAGES ? 'group-hover:scale-110' : 'opacity-50'}`}>📸</div>
-                    <p className={`font-medium ${images.length >= MAX_IMAGES ? 'text-slate-400' : 'text-slate-600'}`}>
-                      {images.length >= MAX_IMAGES ? '已達上傳上限' : '點擊上傳旅遊照片'}
-                    </p>
-                    {images.length < MAX_IMAGES && (
-                      <p className="text-xs text-slate-400 mt-1">最多 {MAX_IMAGES} 張 (每張限 {MAX_FILE_SIZE_MB}MB)</p>
+                    
+                    {isProcessingImages ? (
+                      <div className="flex flex-col items-center justify-center py-2">
+                        <svg className="animate-spin h-8 w-8 text-indigo-500 mb-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <p className="text-sm text-indigo-600 font-medium">正在處理圖片...</p>
+                      </div>
+                    ) : (
+                      <>
+                        <div className={`text-4xl mb-3 transition-transform ${images.length < MAX_IMAGES ? 'group-hover:scale-110' : 'opacity-50'}`}>📸</div>
+                        <p className={`font-medium ${images.length >= MAX_IMAGES ? 'text-slate-400' : 'text-slate-600'}`}>
+                          {images.length >= MAX_IMAGES ? '已達上傳上限' : '點擊上傳旅遊照片'}
+                        </p>
+                        {images.length < MAX_IMAGES && (
+                          <p className="text-xs text-slate-400 mt-1">最多 {MAX_IMAGES} 張</p>
+                        )}
+                      </>
                     )}
                   </div>
 
                   {/* Image Previews */}
                   {images.length > 0 && (
                     <div className="grid grid-cols-3 gap-2 mt-4">
-                      {images.map((img, idx) => (
-                        <div key={idx} className="relative aspect-square group">
+                      {images.map((img) => (
+                        <div key={img.id} className="relative aspect-square group">
                           <img 
                             src={img.previewUrl} 
                             alt="preview" 
                             className="w-full h-full object-cover rounded-lg border border-slate-200"
                           />
                           <button 
-                            onClick={(e) => { e.stopPropagation(); removeImage(idx); }}
+                            onClick={(e) => { e.stopPropagation(); removeImage(img.id); }}
                             className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs shadow-md opacity-0 group-hover:opacity-100 transition-opacity"
                           >
                             ✕
@@ -610,9 +694,9 @@ const App: React.FC = () => {
                   {/* Action Button */}
                   <button
                     onClick={handleGenerate}
-                    disabled={isLoading || images.length === 0}
+                    disabled={isLoading || isProcessingImages || images.length === 0}
                     className={`w-full py-3.5 px-4 rounded-xl shadow-lg text-white font-bold text-lg flex items-center justify-center space-x-2 transition-all transform active:scale-95 ${
-                      isLoading || images.length === 0
+                      isLoading || isProcessingImages || images.length === 0
                         ? 'bg-slate-300 cursor-not-allowed shadow-none'
                         : 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 shadow-indigo-200'
                     }`}

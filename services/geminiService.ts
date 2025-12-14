@@ -9,45 +9,16 @@ if (!apiKey) {
 
 const ai = new GoogleGenAI({ apiKey: apiKey || "dummy_key_for_build" });
 
-// Helper to convert File to base64 for Gemini
-const fileToPart = async (file: File): Promise<{ inlineData: { data: string; mimeType: string } }> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    
-    reader.onloadend = () => {
-      if (reader.result && typeof reader.result === 'string') {
-        const base64String = reader.result.split(',')[1];
-        resolve({
-          inlineData: {
-            data: base64String,
-            mimeType: file.type || 'image/jpeg', // Fallback MIME type
-          },
-        });
-      } else {
-        reject(new Error(`Failed to read file: ${file.name} (Result is empty)`));
-      }
-    };
-    
-    // CRITICAL FIX: Reject with a proper Error object, not the Event object
-    reader.onerror = () => {
-      const errorMsg = reader.error ? reader.error.message : "Unknown FileReader error";
-      reject(new Error(`Error reading file ${file.name}: ${errorMsg}`));
-    };
-    
-    reader.onabort = () => {
-      reject(new Error(`File reading aborted: ${file.name}`));
-    };
-
-    try {
-      reader.readAsDataURL(file);
-    } catch (e: any) {
-      reject(new Error(`Exception starting file read: ${e.message}`));
-    }
-  });
-};
+// Defined type for the input we expect from App.tsx
+export interface ImagePart {
+  inlineData: {
+    data: string;
+    mimeType: string;
+  }
+}
 
 export const generateSocialContent = async (
-  images: File[],
+  imageParts: ImagePart[],
   platforms: Platform[],
   tone: Tone,
   customStyle: string,
@@ -63,8 +34,6 @@ export const generateSocialContent = async (
   }
 
   try {
-    const imageParts = await Promise.all(images.map((img) => fileToPart(img)));
-
     const platformNames = platforms.join(', ');
     
     // Construct extra style instructions

@@ -20,8 +20,10 @@ export interface GeneratedPost {
 }
 
 export interface UploadedImage {
-  file: File;
-  previewUrl: string;
+  id: string;       // Unique ID for React keys
+  base64: string;   // Processed image data
+  mimeType: string; // e.g. 'image/jpeg'
+  previewUrl: string; // For display
 }
 
 export interface SavedRecord {
