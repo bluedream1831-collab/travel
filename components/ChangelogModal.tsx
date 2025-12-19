@@ -6,25 +6,25 @@ interface ChangelogEntry {
   changes: string[];
 }
 
-export const APP_VERSION = 'v1.6.1';
+export const APP_VERSION = 'v1.6.2';
 
 const CHANGELOG_DATA: ChangelogEntry[] = [
+  {
+    version: 'v1.6.2',
+    date: '2024-05-28',
+    changes: [
+      '💾 儲存機制優化：歷史紀錄現在不再儲存原始圖檔，有效避免 LocalStorage 空間爆滿。',
+      '📊 空間監控：歷史紀錄頁面新增儲存空間進度條，隨時掌握剩餘容量。',
+      '🏗️ 穩定性修復：解決舊版紀錄可能導致頁面崩潰的問題。',
+      '🎨 UI 進化：優化「生成結果」區塊的視覺層次感。'
+    ]
+  },
   {
     version: 'v1.6.1',
     date: '2024-05-27',
     changes: [
       '🛠️ 穩定性修復：解決 Gemini 3.0 與地圖工具的相容性問題。',
-      '🤖 動態工具切換：現在系統會根據模型自動切換 Google Maps 或 Google Search 獲取資訊。',
-      '🔍 解析優化：導入更強大的 JSON 提取機制，減少「無法解析回傳格式」的錯誤。',
-      '📝 文案優化：修正部分模型可能在文案中混入 Markdown 標籤的問題。'
-    ]
-  },
-  {
-    version: 'v1.6.0',
-    date: '2024-05-26',
-    changes: [
-      '🗺️ 地點偵測大升級：整合 Grounding 技術。',
-      '📍 座標輔助：新增地理位置權限支援。'
+      '🤖 動態工具切換：現在系統會根據模型自動切換 Google Maps 或 Google Search 獲取資訊。'
     ]
   },
   {
@@ -50,7 +50,7 @@ const ChangelogModal: React.FC<ChangelogModalProps> = ({ isOpen, onClose }) => {
           <h3 className="text-lg font-bold text-slate-800">更新歷程</h3>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600">✕</button>
         </div>
-        <div className="p-6 overflow-y-auto bg-white">
+        <div className="p-6 overflow-y-auto bg-white custom-scrollbar">
           <div className="relative border-l-2 border-slate-200 ml-3 space-y-8">
             {CHANGELOG_DATA.map((entry, idx) => (
               <div key={idx} className="relative pl-6">

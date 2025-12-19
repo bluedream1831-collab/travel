@@ -136,12 +136,28 @@ const App: React.FC = () => {
 
   const handleSaveResult = () => {
     if (!generationResult) return;
-    const record = { id: Date.now(), date: new Date().toISOString(), config: { model: selectedModel, tone: selectedTone, customStyle, locationName, highlights, feelings, platforms: selectedPlatforms }, resultData: generationResult };
+    const record = { 
+      id: Date.now(), 
+      date: new Date().toISOString(), 
+      config: { 
+        model: selectedModel, 
+        tone: selectedTone, 
+        customStyle, 
+        locationName, 
+        highlights, 
+        feelings, 
+        platforms: selectedPlatforms 
+      }, 
+      resultData: generationResult 
+    };
     try {
       const saved = localStorage.getItem('travel_history');
-      localStorage.setItem('travel_history', JSON.stringify([record, ...(saved ? JSON.parse(saved) : [])]));
+      const existing = saved ? JSON.parse(saved) : [];
+      localStorage.setItem('travel_history', JSON.stringify([record, ...existing]));
       setIsSaved(true);
-    } catch (e) { alert("儲存空間不足"); }
+    } catch (e) { 
+      alert("儲存失敗：空間不足。請至歷史紀錄清空舊資料。"); 
+    }
   };
 
   const getModelDescription = (m: AIModel) => {
@@ -177,16 +193,16 @@ const App: React.FC = () => {
                     <span className="text-xs text-slate-500">{images.length}/{MAX_IMAGES}</span>
                   </div>
                 </div>
-                <div onClick={() => !isProcessingImages && images.length < MAX_IMAGES && fileInputRef.current?.click()} className="border-2 border-dashed rounded-xl p-8 text-center cursor-pointer hover:bg-indigo-50 border-slate-300">
+                <div onClick={() => !isProcessingImages && images.length < MAX_IMAGES && fileInputRef.current?.click()} className="border-2 border-dashed rounded-xl p-8 text-center cursor-pointer hover:bg-indigo-50 border-slate-300 transition-colors">
                   <input type="file" ref={fileInputRef} onChange={handleImageUpload} multiple accept="image/*,video/*" className="hidden" />
-                  {isProcessingImages ? <p className="text-indigo-600">正在處理...</p> : <p className="text-slate-600">📸 點擊上傳照片或短片</p>}
+                  {isProcessingImages ? <p className="text-indigo-600 font-medium">正在壓縮處理...</p> : <p className="text-slate-500 font-medium">📸 點擊上傳照片或短片</p>}
                 </div>
                 {images.length > 0 && (
                   <div className="grid grid-cols-3 gap-2 mt-4">
                     {images.map((img) => (
                       <div key={img.id} className="relative aspect-square group">
-                        <img src={img.previewUrl} alt="preview" className="w-full h-full object-cover rounded-lg" />
-                        <button onClick={(e) => { e.stopPropagation(); removeImage(img.id); }} className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100">✕</button>
+                        <img src={img.previewUrl} alt="preview" className="w-full h-full object-cover rounded-lg shadow-sm" />
+                        <button onClick={(e) => { e.stopPropagation(); removeImage(img.id); }} className="absolute -top-1.5 -right-1.5 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity shadow-md">✕</button>
                       </div>
                     ))}
                   </div>
@@ -194,77 +210,122 @@ const App: React.FC = () => {
               </div>
 
               <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-                <h3 className="text-lg font-semibold mb-4 flex items-center"><span className="bg-indigo-100 text-indigo-700 w-6 h-6 rounded-full flex items-center justify-center text-xs mr-2">2</span>設定與模型</h3>
+                <h3 className="text-lg font-semibold mb-4 flex items-center"><span className="bg-indigo-100 text-indigo-700 w-6 h-6 rounded-full flex items-center justify-center text-xs mr-2">2</span>風格設定</h3>
+                
                 <div className="mb-4">
-                  <label className="block text-sm font-medium text-slate-700 mb-2">AI 模型版本</label>
-                  <select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value as AIModel)} className="w-full rounded-lg border-slate-200 text-sm p-3 bg-slate-50">
-                    <option value={AIModel.GEMINI_3_FLASH}>Gemini 3.0 Flash (推薦)</option>
-                    <option value={AIModel.GEMINI_2_5_FLASH}>Gemini 2.5 Flash</option>
-                    <option value={AIModel.GEMINI_3_PRO}>Gemini 3.0 Pro</option>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">AI 模型</label>
+                  <select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value as AIModel)} className="w-full rounded-lg border-slate-200 text-sm p-3 bg-slate-50 border focus:ring-2 focus:ring-indigo-500 outline-none">
+                    <option value={AIModel.GEMINI_3_FLASH}>Gemini 3.0 Flash (智慧平衡)</option>
+                    <option value={AIModel.GEMINI_2_5_FLASH}>Gemini 2.5 Flash (快速精準)</option>
+                    <option value={AIModel.GEMINI_3_PRO}>Gemini 3.0 Pro (文藝創作)</option>
                   </select>
-                  <div className="mt-2 text-xs text-indigo-700 bg-indigo-50 p-2 rounded">{getModelDescription(selectedModel)}</div>
+                  <div className="mt-2 text-[11px] text-indigo-700 bg-indigo-50/50 p-2 rounded leading-relaxed">{getModelDescription(selectedModel)}</div>
                 </div>
+
                 <div className="mb-4">
-                  <label className="block text-sm font-medium text-slate-700 mb-2">基礎風格</label>
-                  <select value={selectedTone} onChange={(e) => setSelectedTone(e.target.value as Tone)} className="w-full rounded-lg border-slate-200 text-sm p-3 bg-slate-50">
-                    {Object.values(Tone).map((tone) => <option key={tone} value={tone}>{tone}</option>)}
-                  </select>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">基礎語調</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {Object.values(Tone).map(t => (
+                      <button key={t} onClick={() => setSelectedTone(t)} className={`px-3 py-2 text-xs rounded-lg border transition-all ${selectedTone === t ? 'bg-indigo-600 border-indigo-600 text-white font-bold' : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-300'}`}>{t}</button>
+                    ))}
+                  </div>
                 </div>
-                <div className="mb-6 space-y-4 pt-4 border-t">
-                  <h4 className="text-sm font-semibold flex items-center">📝 旅遊細節</h4>
-                  <input type="text" value={locationName} onChange={(e) => setLocationName(e.target.value)} placeholder="📍 景點/地點名稱 (留空讓 AI 偵測)" className="w-full rounded-lg border-slate-200 text-sm p-2.5 border bg-slate-50" />
-                  <textarea value={highlights} onChange={(e) => setHighlights(e.target.value)} placeholder="✨ 行程亮點 (美食、設施...)" rows={2} className="w-full rounded-lg border-slate-200 text-sm p-2.5 border bg-slate-50" />
-                </div>
+
                 <div className="mb-6">
-                  <label className="block text-sm font-medium text-slate-700 mb-2">平台</label>
-                  <div className="space-y-1">
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="block text-sm font-medium text-slate-700">客製化要求 (選填)</label>
+                    <button onClick={() => setIsEmojiModalOpen(true)} className="text-xs text-indigo-600 hover:underline">編輯常用符號</button>
+                  </div>
+                  <textarea value={customStyle} onChange={(e) => setCustomStyle(e.target.value)} placeholder="例如：多加一點 Emoji、用日本女高中生語氣..." rows={2} className="w-full rounded-lg border-slate-200 text-sm p-3 bg-slate-50 border focus:ring-2 focus:ring-indigo-500 outline-none" />
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {commonEmojis.slice(0, 12).map((emoji, idx) => (
+                      <button key={idx} onClick={() => addEmojiToStyle(emoji)} className="w-8 h-8 flex items-center justify-center bg-white border border-slate-200 rounded-md hover:bg-slate-50 transition-colors text-lg">{emoji}</button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mb-6 space-y-4 pt-4 border-t">
+                  <h4 className="text-sm font-semibold text-slate-800">📝 旅遊細節</h4>
+                  <input type="text" value={locationName} onChange={(e) => setLocationName(e.target.value)} placeholder="📍 景點名稱 (留空讓 AI 偵測)" className="w-full rounded-lg border-slate-200 text-sm p-2.5 border bg-slate-50 focus:ring-2 focus:ring-indigo-500 outline-none" />
+                  <textarea value={highlights} onChange={(e) => setHighlights(e.target.value)} placeholder="✨ 行程亮點 (必吃美食、特色風景...)" rows={2} className="w-full rounded-lg border-slate-200 text-sm p-2.5 border bg-slate-50 focus:ring-2 focus:ring-indigo-500 outline-none" />
+                </div>
+
+                <div className="mb-6">
+                  <label className="block text-sm font-medium text-slate-700 mb-2">發布平台</label>
+                  <div className="grid grid-cols-2 gap-2">
                     {Object.values(Platform).map((p) => (
-                      <label key={p} className="flex items-center space-x-2 p-2 hover:bg-slate-50 rounded cursor-pointer">
-                        <input type="checkbox" checked={selectedPlatforms.includes(p)} onChange={() => togglePlatform(p)} className="text-indigo-600 rounded" />
-                        <span className="text-sm">{p}</span>
+                      <label key={p} className={`flex items-center space-x-2 p-2 rounded-lg border cursor-pointer transition-all ${selectedPlatforms.includes(p) ? 'bg-indigo-50 border-indigo-200' : 'bg-white border-slate-100 hover:border-indigo-100'}`}>
+                        <input type="checkbox" checked={selectedPlatforms.includes(p)} onChange={() => togglePlatform(p)} className="text-indigo-600 rounded focus:ring-indigo-500" />
+                        <span className="text-xs font-medium text-slate-700">{p}</span>
                       </label>
                     ))}
                   </div>
                 </div>
-                <button onClick={handleGenerate} disabled={isLoading || images.length === 0} className={`w-full py-3.5 rounded-xl shadow-lg text-white font-bold transition-all ${isLoading ? 'bg-slate-300' : 'bg-gradient-to-r from-indigo-600 to-purple-600'}`}>
-                  {isLoading ? "生成中..." : "✨ 立即生成"}
+
+                <button onClick={handleGenerate} disabled={isLoading || images.length === 0} className={`w-full py-4 rounded-xl shadow-lg text-white font-bold transition-all transform active:scale-95 ${isLoading ? 'bg-slate-300 cursor-not-allowed' : 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:shadow-indigo-200 hover:brightness-110'}`}>
+                  {isLoading ? (
+                    <div className="flex items-center justify-center space-x-2">
+                      <svg className="animate-spin h-5 w-5 text-white" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                      <span>正在分析並撰寫文案...</span>
+                    </div>
+                  ) : "✨ 立即生成圖文"}
                 </button>
-                {error && <p className="mt-4 text-xs text-red-600">{error}</p>}
+                {error && <div className="mt-4 p-3 bg-red-50 border border-red-100 rounded-lg text-xs text-red-600 animate-fade-in">{error}</div>}
               </div>
             </div>
 
             <div className="lg:col-span-8">
               {generationResult ? (
                 <div className="space-y-6 animate-fade-in-up">
-                  <div className={`p-5 rounded-2xl border-2 flex items-start space-x-4 ${generationResult.analysis.confidence === 'HIGH' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-slate-50 border-slate-200 text-slate-700'}`}>
-                    <div className="text-3xl">🎯</div>
+                  <div className={`p-5 rounded-2xl border-2 flex items-start space-x-4 shadow-sm transition-all ${generationResult.analysis.confidence === 'HIGH' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-slate-50 border-slate-200 text-slate-700'}`}>
+                    <div className="text-3xl filter drop-shadow-sm">🎯</div>
                     <div className="flex-1">
                       <div className="flex items-center justify-between">
                         <h4 className="font-bold text-lg">AI 地點偵測：{generationResult.analysis.detectedName}</h4>
                         {generationResult.analysis.mapsUrl && (
-                          <a href={generationResult.analysis.mapsUrl} target="_blank" rel="noopener noreferrer" className="text-xs bg-white text-indigo-600 px-3 py-1.5 rounded-full border border-indigo-200 hover:bg-indigo-50 font-bold transition-colors shadow-sm">
+                          <a href={generationResult.analysis.mapsUrl} target="_blank" rel="noopener noreferrer" className="text-xs bg-white text-indigo-600 px-3 py-1.5 rounded-full border border-indigo-200 hover:bg-indigo-50 font-bold transition-all shadow-sm active:scale-95">
                             {generationResult.analysis.mapsUrl.includes('google.com/maps') ? '🗺️ 在地圖中開啟' : '🔗 查看參考資料'}
                           </a>
                         )}
                       </div>
-                      <p className="text-sm mt-2 opacity-90 leading-relaxed">{generationResult.analysis.evidence}</p>
-                      <div className="mt-3 inline-flex items-center text-[10px] bg-white/50 px-2 py-0.5 rounded uppercase font-bold tracking-wider">信心指數: {generationResult.analysis.confidence}</div>
+                      <p className="text-sm mt-2 opacity-90 leading-relaxed font-medium">{generationResult.analysis.evidence}</p>
+                      <div className="mt-3 inline-flex items-center text-[10px] bg-white/60 px-2 py-0.5 rounded-md uppercase font-bold tracking-wider border border-white/50">信心指數: {generationResult.analysis.confidence}</div>
                     </div>
                   </div>
+                  
                   <div className="flex items-center justify-between">
-                     <h3 className="text-xl font-bold text-slate-800">生成結果</h3>
-                     <button onClick={handleSaveResult} disabled={isSaved} className={`px-4 py-2 rounded-lg text-sm transition-all ${isSaved ? 'bg-green-100 text-green-700' : 'bg-white border text-slate-600 hover:bg-slate-50'}`}>
-                        {isSaved ? "✓ 已儲存" : "💾 儲存"}
+                     <h3 className="text-xl font-bold text-slate-800 flex items-center">
+                       <span className="w-1.5 h-6 bg-indigo-600 rounded-full mr-3"></span>
+                       生成結果
+                     </h3>
+                     <button onClick={handleSaveResult} disabled={isSaved} className={`px-4 py-2 rounded-lg text-sm font-bold shadow-sm transition-all active:scale-95 ${isSaved ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+                        {isSaved ? "✓ 已儲存至紀錄" : "💾 儲存結果"}
                      </button>
                   </div>
+
                   <div className="grid grid-cols-1 gap-6">
                     {generationResult.posts.map((post, idx) => <PlatformCard key={idx} post={post} />)}
                   </div>
                 </div>
               ) : (
-                <div className="h-full flex flex-col items-center justify-center bg-white rounded-2xl border-2 border-dashed border-slate-200 min-h-[500px] text-slate-400">
-                  <div className="text-6xl mb-4 opacity-50">🌍</div>
-                  <p className="text-lg font-medium">上傳照片，AI 將自動為您定位並撰寫</p>
+                <div className="h-full flex flex-col items-center justify-center bg-white rounded-3xl border-2 border-dashed border-slate-200 min-h-[550px] text-slate-400 p-8 text-center">
+                  <div className="w-24 h-24 bg-slate-50 rounded-full flex items-center justify-center mb-6 text-5xl">🌍</div>
+                  <h4 className="text-xl font-bold text-slate-700 mb-2">準備好分享你的旅程了嗎？</h4>
+                  <p className="text-sm max-w-sm leading-relaxed">上傳你的旅遊照片或影片，AI 將自動偵測地點並根據不同社群平台的特性撰寫專屬文案。</p>
+                  <div className="mt-8 flex gap-4">
+                    <div className="flex flex-col items-center space-y-1">
+                      <div className="w-8 h-8 rounded-full bg-pink-100 text-pink-600 flex items-center justify-center text-xs font-bold">IG</div>
+                      <span className="text-[10px]">吸睛文案</span>
+                    </div>
+                    <div className="flex flex-col items-center space-y-1">
+                      <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-xs font-bold">FB</div>
+                      <span className="text-[10px]">詳盡報導</span>
+                    </div>
+                    <div className="flex flex-col items-center space-y-1">
+                      <div className="w-8 h-8 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center text-xs font-bold">V</div>
+                      <span className="text-[10px]">長文創作</span>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -272,9 +333,14 @@ const App: React.FC = () => {
         )}
       </main>
 
-      <footer className="bg-white border-t py-4 text-center text-xs text-slate-400">
-        <p>TravelFlow AI <button onClick={() => setIsChangelogOpen(true)} className="hover:text-indigo-600 underline">{APP_VERSION}</button></p>
+      <footer className="bg-white border-t py-6 text-center text-xs text-slate-400">
+        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row justify-between items-center gap-4">
+          <p>© 2024 TravelFlow AI - 讓回憶自動變為動人故事</p>
+          <button onClick={() => setIsChangelogOpen(true)} className="px-3 py-1 bg-slate-100 rounded-full hover:bg-indigo-50 hover:text-indigo-600 transition-all font-medium">版本紀錄：{APP_VERSION}</button>
+        </div>
       </footer>
+
+      <EmojiEditorModal isOpen={isEmojiModalOpen} onClose={() => setIsEmojiModalOpen(false)} currentEmojis={commonEmojis} onSave={handleSaveEmojis} />
       <ChangelogModal isOpen={isChangelogOpen} onClose={() => setIsChangelogOpen(false)} />
     </div>
   );
