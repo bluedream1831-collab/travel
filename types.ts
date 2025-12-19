@@ -13,9 +13,15 @@ export enum Tone {
   EXCITED = '熱情奔放',
 }
 
+export enum AIModel {
+  GEMINI_2_5_FLASH = 'gemini-2.5-flash-latest',
+  GEMINI_3_FLASH = 'gemini-3-flash-preview',
+  GEMINI_3_PRO = 'gemini-3-pro-preview',
+}
+
 export interface GeneratedPost {
   platform: Platform;
-  title?: string; // For blog posts like Vocus
+  title?: string;
   content: string;
   hashtags: string[];
 }
@@ -23,7 +29,8 @@ export interface GeneratedPost {
 export interface LocationAnalysis {
   detectedName: string;
   confidence: 'HIGH' | 'MEDIUM' | 'LOW';
-  evidence: string; // Why did the AI guess this? (e.g., "Signboard says 'Kinkakuji'", "Eiffel Tower visible")
+  evidence: string; 
+  mapsUrl?: string;
 }
 
 export interface GenerationResult {
@@ -32,17 +39,18 @@ export interface GenerationResult {
 }
 
 export interface UploadedImage {
-  id: string;       // Unique ID for React keys
-  base64: string;   // Processed image data
-  mimeType: string; // e.g. 'image/jpeg'
-  previewUrl: string; // For display
-  isVideo?: boolean; // New flag to indicate if this source was a video
+  id: string;       
+  base64: string;   
+  mimeType: string; 
+  previewUrl: string; 
+  isVideo?: boolean; 
 }
 
 export interface SavedRecord {
   id: number;
   date: string;
   config: {
+    model: AIModel;
     tone: Tone;
     customStyle: string;
     locationName: string;
@@ -50,5 +58,5 @@ export interface SavedRecord {
     feelings: string;
     platforms: Platform[];
   };
-  resultData: GenerationResult; // Changed from results to resultData to store analysis
+  resultData: GenerationResult; 
 }
