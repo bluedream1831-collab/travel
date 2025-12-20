@@ -1,3 +1,4 @@
+
 export enum Platform {
   INSTAGRAM = 'Instagram',
   FACEBOOK = 'Facebook',
@@ -17,6 +18,12 @@ export enum AIModel {
   GEMINI_2_5_FLASH = 'gemini-2.5-flash-latest',
   GEMINI_3_FLASH = 'gemini-3-flash-preview',
   GEMINI_3_PRO = 'gemini-3-pro-preview',
+}
+
+export interface StylePreset {
+  id: string;
+  name: string;
+  content: string;
 }
 
 export interface GeneratedPost {

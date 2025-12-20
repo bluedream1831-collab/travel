@@ -1,4 +1,5 @@
-import { GoogleGenAI } from "@google/genai";
+
+import { GoogleGenAI, Type } from "@google/genai";
 import { Platform, Tone, GenerationResult, AIModel } from "../types";
 
 export interface ImagePart {
@@ -9,15 +10,10 @@ export interface ImagePart {
 }
 
 /**
- * Utility to extract JSON from a string that might contain text around it.
+ * 建立一個穩定的 Google Maps 搜尋連結作為備案。
  */
-function extractJson(text: string): string {
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  if (start !== -1 && end !== -1 && end > start) {
-    return text.substring(start, end + 1);
-  }
-  return text;
+function createFallbackUrl(name: string): string {
+  return `https://www.google.com/maps/search/${encodeURIComponent(name)}`;
 }
 
 export const generateSocialContent = async (
@@ -43,106 +39,109 @@ export const generateSocialContent = async (
   try {
     const platformNames = platforms.join(', ');
     const extraStyleInstruction = customStyle 
-      ? `\n⚠️ 【用戶客製化風格】\n請務必遵循：${customStyle}\n` 
+      ? `\n⚠️ 【用戶專屬風格 - 優先度最高】\n"${customStyle}"\n` 
       : "";
 
-    // Determine which tool to use based on the model
     const isGemini25 = model.includes('2.5');
     const tool = isGemini25 ? { googleMaps: {} } : { googleSearch: {} };
 
-    const systemInstruction = `
-      你是一位專業的旅遊社群媒體經營者。
-      
-      【地點偵測與資訊檢索】
-      1. 使用你擁有的工具 (${isGemini25 ? 'Google Maps' : 'Google Search'}) 來驗證地點。
-      2. 分析照片中的招牌、地標、建築。
-      3. ${isGemini25 ? '請務必在地圖上找到具體名稱。' : '請搜尋該地點最新的旅遊評價與資訊。'}
-
-      【輸出規範】
-      - 禁止使用 Markdown 標題或粗體。
-      - 僅輸出純 JSON。
-      - 格式範例：
-      {
-        "analysis": {
-          "detectedName": "名稱",
-          "confidence": "HIGH",
-          "evidence": "原因",
-          "mapsUrl": "Google Maps 或 參考網址"
+    // 定義 JSON Schema
+    const responseSchema = {
+      type: Type.OBJECT,
+      properties: {
+        analysis: {
+          type: Type.OBJECT,
+          properties: {
+            detectedName: { type: Type.STRING },
+            confidence: { type: Type.STRING, enum: ["HIGH", "MEDIUM", "LOW"] },
+            evidence: { type: Type.STRING },
+            mapsUrl: { type: Type.STRING }
+          },
+          required: ["detectedName", "confidence", "evidence", "mapsUrl"]
         },
-        "posts": [
-          {
-            "platform": "Instagram",
-            "content": "內容",
-            "hashtags": ["標籤"]
+        posts: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              platform: { type: Type.STRING },
+              title: { type: Type.STRING },
+              content: { type: Type.STRING },
+              hashtags: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING }
+              }
+            },
+            required: ["platform", "content", "hashtags"]
           }
-        ]
-      }
+        }
+      },
+      required: ["analysis", "posts"]
+    };
+
+    const systemInstruction = `
+      你是一位多才多藝的旅遊專家。
+      
+      【內容禁令：非常重要】
+      1. 嚴禁使用 Markdown 標題符號 (例如 ###, ##, #)。
+      2. 嚴禁使用 Markdown 粗體符號 (如 **text**)。
+      3. 若需區分段落或標題，請直接使用全形括號或裝飾符號，例如：【必看亮點】、｜景點特色｜、◆ 交通建議。
+      
+      【撰寫策略】
+      - Instagram/Threads/Facebook：活潑、Emoji 豐富、具吸引力，100-300字。
+      - Fanggezi (方格子) / Pixnet (痞客邦)：深度長文 (600字+)，具文學性與細節。
+
+      【技術規範】
+      - 內容中使用 \\n 進行換行。
     `;
 
     const prompt = `
       任務：
-      1. 分析照片地點。座標參考：${userLocation ? `${userLocation.lat}, ${userLocation.lng}` : "無"}。用戶提供：${details.locationName || "未提供"}。
-      2. 撰寫貼文：${platformNames}。風格：${tone}。${extraStyleInstruction}
+      1. 分析照片地點。地點：${details.locationName || "自動偵測"}。座標：${userLocation ? `${userLocation.lat}, ${userLocation.lng}` : "無"}。
+      2. 撰寫平台：${platformNames}。風格：${tone}。${extraStyleInstruction}
       3. 行程亮點：${details.highlights || "依照片發揮"}。個人感受：${details.feelings || "依照片發揮"}。
       
-      請嚴格輸出 JSON。
+      請在文案中精確使用大量 Emoji，並確保完全不出現 ### 符號。
     `;
 
     const response = await ai.models.generateContent({
       model: model,
       contents: {
-        parts: [
-            ...imageParts,
-            { text: prompt }
-        ]
+        parts: [...imageParts, { text: prompt }]
       },
       config: {
-        systemInstruction: systemInstruction,
-        // Rules: googleMaps/googleSearch incompatible with responseMimeType: 'application/json'
+        systemInstruction,
         tools: [tool],
-        toolConfig: (isGemini25 && userLocation) ? {
-          retrievalConfig: {
-            latLng: {
-              latitude: userLocation.lat,
-              longitude: userLocation.lng
-            }
-          }
-        } : undefined
+        responseMimeType: "application/json",
+        responseSchema
       },
     });
 
     const text = response.text;
-    if (!text) throw new Error("API 回傳為空");
-
-    // Stronger JSON extraction
-    const cleanJson = extractJson(text.trim());
+    if (!text) throw new Error("AI 未能產生內容。");
 
     try {
-      const parsedResult = JSON.parse(cleanJson) as GenerationResult;
-
-      // Logic to pull URL from grounding metadata if JSON didn't include it
+      const parsedResult = JSON.parse(text) as GenerationResult;
       const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
+      let verifiedUrl = "";
       if (groundingChunks && groundingChunks.length > 0) {
-        // Find first available URI from Maps or Search
         const firstSource = groundingChunks.find((c: any) => c.maps?.uri || c.web?.uri);
-        if (firstSource && !parsedResult.analysis.mapsUrl) {
-          parsedResult.analysis.mapsUrl = firstSource.maps?.uri || firstSource.web?.uri;
-        }
+        verifiedUrl = firstSource?.maps?.uri || firstSource?.web?.uri || "";
       }
+
+      if (verifiedUrl) parsedResult.analysis.mapsUrl = verifiedUrl;
+      else if (!parsedResult.analysis.mapsUrl) parsedResult.analysis.mapsUrl = createFallbackUrl(parsedResult.analysis.detectedName);
 
       parsedResult.posts = parsedResult.posts.map(post => ({
         ...post,
-        content: post.content.replace(/\\n/g, '\n').replace(/\*\*/g, '')
+        content: post.content.replace(/\\n/g, '\n').replace(/#/g, '') // 雙重保險過濾 #
       }));
 
       return parsedResult;
     } catch (parseError) {
-      console.error("Parse Error. Raw Output:", text);
-      throw new Error("AI 輸出格式不符合 JSON，請嘗試重新生成。");
+      throw new Error("格式解析錯誤，請重試。");
     }
-
   } catch (error: any) {
-    console.error("Gemini Service Error:", error);
     throw error;
   }
 };
